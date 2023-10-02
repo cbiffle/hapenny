@@ -24,3 +24,28 @@ Pretty reasonable, I think. 3 cycles for most instructions since the final cycle
 issues a fetch. 4 cycles for stores. A great many cycles for shifts.
 
 Lessee how things shape up in Amaranth.
+
+---
+
+Going pretty well I think
+
+Currently fetching rs1 followed by rs2. Dinky did it in the other order. I think
+there's some value to reversing it. While load and store both use rs1 as the
+base address, it's a question of when it becomes available.
+
+Currently, load is able to skip a cycle compared to store because it only needs
+rs1. Store needs to wait for both registers before it can issue a bus
+transaction.
+
+---
+
+Interesting observation.
+
+On a 4LUT part, putting 2muxes on the inputs of an adder has equivalent resource
+cost to generating two adders and muxing between them. Assuming the muxes don't
+need to be switched separately.
+
+Muxing adders has the advantage of loosening the timing constraint on the mux
+control signal. For whatever that's worth.
+
+
