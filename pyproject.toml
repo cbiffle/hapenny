@@ -1,0 +1,23 @@
+[project]
+dynamic = ["version"]
+
+name = "rv32"
+
+requires-python = "~=3.8"
+dependencies = [
+    "amaranth[builtin-yosys]@git+https://github.com/amaranth-lang/amaranth",
+    "amaranth-boards@git+https://github.com/amaranth-lang/amaranth-boards",
+    "yowasp-yosys",
+]
+
+[project.optional-dependencies]
+debug = ["jtagtap"]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm.scripts]
+_.env_file = ".env.toolchain"
+test.composite = ["test-code"]
+test-code.cmd = "python -m unittest discover -t . -s tests -v"

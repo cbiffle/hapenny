@@ -1,0 +1,26 @@
+# Small RV32 core using Amaranth
+
+Looking into doing a tiny, probably-not-pipelined RV32 core for use on small
+iCE40s. Likely approach:
+
+- Use 2x BRAMs to provide a 1R1W register file.
+- Since that necessitates most instructions taking >1 cycle, use as many cycles
+  as seems appropriate.
+
+This is pretty similar to my Dinky5 core, which, for the record, used the
+following states:
+
+```
+    JustFetchState, // Reset, or second cycle of store.
+    Reg2State,      // Reading instruction, selecting rs2.
+    Reg1State,      // Latching x2, selecting rs1.
+    ExecuteState,   // Executing first instruction cycle.
+    LoadState,      // Second cycle for loads.
+    ShiftState,     // Processing a serial shift operation.
+    HaltState       // Something has gone wrong.
+```
+
+Pretty reasonable, I think. 3 cycles for most instructions since the final cycle
+issues a fetch. 4 cycles for stores. A great many cycles for shifts.
+
+Lessee how things shape up in Amaranth.

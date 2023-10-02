@@ -1,0 +1,5 @@
+__pycache__/
+*.gtkw
+*.vcd
+.pdm-python
+build/
