@@ -260,6 +260,27 @@ if __name__ == "__main__":
     def process():
         yield from halt()
         yield from test_inst(
+            "LUI x1, 0xAAAAA000",
+            0b10101010101010101010_00001_0110111,
+            after={
+                1: 0xAAAAA000,
+                'PC': 4,
+            },
+        )
+
+        yield from test_inst(
+            "AUIPC x1, 0xAAAAA000",
+            0b10101010101010101010_00001_0010111,
+            before={
+                'PC': 0xCAFE,
+            },
+            after={
+                1: 0xAAAB6AFE,
+                'PC': 0xCAFE + 4,
+            },
+        )
+
+        yield from test_inst(
             "JAL x9, .",
             0b00000000000000000000_01001_1101111,
             after={
@@ -292,6 +313,39 @@ if __name__ == "__main__":
                 'PC': 0xCAFE + 0x456,
             },
         )
+
+        branch_cases = [
+            ("EQ", 0b000, 0xCAFEBABE, 0xCAFEBABE, True),
+            ("EQ", 0b000, 0xCAFEBABE, 0xBAADF00D, False),
+            ("NE", 0b001, 0xCAFEBABE, 0xBAADF00D, True),
+            ("NE", 0b001, 0xCAFEBABE, 0xCAFEBABE, False),
+            ("LT", 0b100, 0xCAFEBABE, 0x12345678, True),
+            ("LT", 0b100, 0x12345678, 0xCAFEBABE, False),
+            ("GE", 0b101, 0x12345678, 0xCAFEBABE, True),
+            ("GE", 0b101, 0xCAFEBABE, 0x12345678, False),
+            ("LTU", 0b110, 0x12345678, 0xCAFEBABE, True),
+            ("LTU", 0b110, 0xCAFEBABE, 0x12345678, False),
+            ("GEU", 0b111, 0xCAFEBABE, 0x12345678, True),
+            ("GEU", 0b111, 0x12345678, 0xCAFEBABE, False),
+        ]
+
+        for name, opc, x1, x2, taken in branch_cases:
+            desc = f"B{name} x1, x2, 0x400"
+            if not taken:
+                desc += " (not taken)"
+
+            yield from test_inst(
+                desc,
+                0b0_100000_00010_00001_000_0000_0_1100011 | (opc << 12),
+                before={
+                    'PC': 0xF000,
+                    1: x1,
+                    2: x2,
+                },
+                after={
+                    'PC': 0xF000 + (0x400 if taken else 4),
+                },
+            )
 
         load_cases = [
             ("LW", 0b010, 0x12345678, 0, 0x12345678),
@@ -372,60 +426,6 @@ if __name__ == "__main__":
             )
 
         yield from test_inst(
-            "LUI x1, 0xAAAAA000",
-            0b10101010101010101010_00001_0110111,
-            after={
-                1: 0xAAAAA000,
-                'PC': 4,
-            },
-        )
-
-        yield from test_inst(
-            "AUIPC x1, 0xAAAAA000",
-            0b10101010101010101010_00001_0010111,
-            before={
-                'PC': 0xCAFE,
-            },
-            after={
-                1: 0xAAAB6AFE,
-                'PC': 0xCAFE + 4,
-            },
-        )
-
-        branch_cases = [
-            ("EQ", 0b000, 0xCAFEBABE, 0xCAFEBABE, True),
-            ("EQ", 0b000, 0xCAFEBABE, 0xBAADF00D, False),
-            ("NE", 0b001, 0xCAFEBABE, 0xBAADF00D, True),
-            ("NE", 0b001, 0xCAFEBABE, 0xCAFEBABE, False),
-            ("LT", 0b100, 0xCAFEBABE, 0x12345678, True),
-            ("LT", 0b100, 0x12345678, 0xCAFEBABE, False),
-            ("GE", 0b101, 0x12345678, 0xCAFEBABE, True),
-            ("GE", 0b101, 0xCAFEBABE, 0x12345678, False),
-            ("LTU", 0b110, 0x12345678, 0xCAFEBABE, True),
-            ("LTU", 0b110, 0xCAFEBABE, 0x12345678, False),
-            ("GEU", 0b111, 0xCAFEBABE, 0x12345678, True),
-            ("GEU", 0b111, 0x12345678, 0xCAFEBABE, False),
-        ]
-
-        for name, opc, x1, x2, taken in branch_cases:
-            desc = f"B{name} x1, x2, 0x400"
-            if not taken:
-                desc += " (not taken)"
-
-            yield from test_inst(
-                desc,
-                0b0_100000_00010_00001_000_0000_0_1100011 | (opc << 12),
-                before={
-                    'PC': 0xF000,
-                    1: x1,
-                    2: x2,
-                },
-                after={
-                    'PC': 0xF000 + (0x400 if taken else 4),
-                },
-            )
-
-        yield from test_inst(
             "ADD x1, x2, x3",
             0b0000000_00011_00010_000_00001_0110011,
             before={
@@ -434,6 +434,37 @@ if __name__ == "__main__":
             },
             after={
                 1: (0xCAFEBABE + 0xBAADF00D) & 0xFFFFFFFF,
+            },
+        )
+
+        yield from test_inst(
+            "ADDI x1, x2, 0x123",
+            0b000100100011_00010_000_00001_0010011,
+            before={
+                2: 0xCAFEBABE,
+            },
+            after={
+                1: (0xCAFEBABE + 0x123) & 0xFFFFFFFF,
+            },
+        )
+        yield from test_inst(
+            "ADDI x1, x2, -0x123",
+            0b111011011101_00010_000_00001_0010011,
+            before={
+                2: 0xCAFEBABE,
+            },
+            after={
+                1: (0xCAFEBABE + -0x123) & 0xFFFFFFFF,
+            },
+        )
+        yield from test_inst(
+            "XORI x1, x2, 0x123",
+            0b000100100011_00010_100_00001_0010011,
+            before={
+                2: 0xCAFEBABE,
+            },
+            after={
+                1: 0xCAFEBABE ^ 0x123,
             },
         )
 
@@ -480,37 +511,6 @@ if __name__ == "__main__":
                         1: result,
                     },
                 )
-
-        yield from test_inst(
-            "ADDI x1, x2, 0x123",
-            0b000100100011_00010_000_00001_0010011,
-            before={
-                2: 0xCAFEBABE,
-            },
-            after={
-                1: (0xCAFEBABE + 0x123) & 0xFFFFFFFF,
-            },
-        )
-        yield from test_inst(
-            "ADDI x1, x2, -0x123",
-            0b111011011101_00010_000_00001_0010011,
-            before={
-                2: 0xCAFEBABE,
-            },
-            after={
-                1: (0xCAFEBABE + -0x123) & 0xFFFFFFFF,
-            },
-        )
-        yield from test_inst(
-            "XORI x1, x2, 0x123",
-            0b000100100011_00010_100_00001_0010011,
-            before={
-                2: 0xCAFEBABE,
-            },
-            after={
-                1: 0xCAFEBABE ^ 0x123,
-            },
-        )
 
 
     sim.add_sync_process(process)

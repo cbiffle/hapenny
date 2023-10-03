@@ -1,4 +1,5 @@
 import itertools
+import random
 
 from amaranth import *
 from amaranth.lib.wiring import *
@@ -62,13 +63,23 @@ class TestMemory(Component):
 class Test(Elaboratable):
     def elaborate(self, platform):
         m = Module()
-        m.submodules.cpu = cpu = Cpu()
+        m.submodules.cpu = cpu = Cpu(
+            check_alignment = False,
+            #wait = False,
+            pc_width = 8,
+            #allow_halt_request = False,
+        )
+        random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
-            0b000010101100_00000_010_00001_0000011, # LW x1, (x0 + 0xAC)
-
-            0b10101010101010101010_00001_0110111, # LUI x1, 0xAAAAA
-
-            0b00000000000000000000_00000_1101111, # JAL x0, .
+            random.getrandbits(32) for _ in range(256)
+            #0b00000000000000000000000000010011,
+            #0b00000000000000000000000001100111,
+            #0b10000000000000000000000000100011,
+            #0b000010101100_00000_010_00001_0000011, # LW x1, (x0 + 0xAC)
+            #0b10101010101010101010_00001_0010111, # AUIPC x1, ...
+            #0b10101010101010101010_00001_0110111, # LUI x1, 0xAAAAA
+            #0b0_100000_00010_00001_000_0000_0_1100011, # BEQ something
+            #0b00000000000000000000_00000_1101111, # JAL x0, .
         ])
 
         connect(m, cpu.mem_out, mem.command)

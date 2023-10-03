@@ -1,0 +1,88 @@
+Okay, got a complete port of Dinky done, and ... it's considerably larger.
+
+Like, 50% larger.
+
+I have admittedly added some features to the design, so, let me parameterize
+those so I can evaluate with and without them.
+
+# Alignment checks
+
+Present in Dinky5, but, easy enough to make conditional.
+
+With: 925 LC / 47.88 MHz
+Without: 912 LC / 44.75 MHz
+
+# Wait states / bus ready lines
+
+DinkyBus doesn't allow wait states. The icestick demo doesn't make much use of
+them.
+
+Removed: 907 LC / 44.29 MHz
+
+# PC implemented width
+
+Dinky5 demo on Icestick used an 8-bit PC. PC width doesn't automatically shrink
+to fit memory bus implementation width, because PC is program visible in
+situations like JAL.
+
+Parameterizing it down to 8 bits: 830 LC / 47.54 MHz
+
+Turning alignment checks back on: 846 LC
+
+# Halting debug
+
+While halting debug isn't wired up in the icestick demo, maybe I should disable
+it conclusively. This is a matter of
+
+1. Converting all checks of the `halt_request` pin into constant 0s
+2. Removing the entire HALT case from the switch.
+
+838 LC / 43.78 MHz. So, some halt logic _was_ getting built in. But not very
+much.
+
+# Fixing PC on fetch
+
+Turns out, any overlapped fetch was using the wrong PC value, failing to lop off
+its bottom two bits. Bet this was producing some extra muxes!
+
+836 LC - so, uh, yeah, technically, but not a lot.
+
+
+# Asserting `mem_in.ready` on loads
+
+whoops
+
+No impact on the icestick demo since the memory there ignores it.
+
+
+# Instruction mix
+
+Motherfucker.
+
+The synthesis tools are being clever about the contents of RAM. Changing the
+instruction mix affects synthesized size.
+
+Using Dinky5's test program (under the assumption that this shit was happening
+before) I get 764 LCs.
+
+By filling RAM with random bits, we're up to 955 LCs with the parameterization
+above.
+
+Without it: 1217
+
+Well, that makes all of these results really hard to compare then.
+
+
+# Retesting with random data in memory
+
+- Disabling alignment checks: -22 LUTs
+- Disabling ready lines from memory: -6 LUTs (note: memory wasn't relying on
+  them)
+- Shrinking PC: -252 LUTs
+- Disabling halting debug: -7 LUTs (note: interface was not connected)
+
+Moving PC displacement immediate selection into decode step and sharing the PC
+adder across various control flow instructions: made shit bigger. But also
+faster.
+
+

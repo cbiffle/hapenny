@@ -1,0 +1,39 @@
+Got most of RV32 implemented at this point.
+
+Missing: FENCE and SYSTEM (and so the CSRs and whatnot)
+
+Current design's synthesizing a lot larger than I'd like. Adding the byte and
+halfword loads and stores enlarged things _significantly._ Removing
+byte/halfword _store_ support saves ... not a lot. 4 LUTs. Removing
+byte/halfword and extending _loads_ saves 105 LUTs.
+
+SLT and friends are usually the critical path, which has happened to me before.
+Making them as simple as possible is basically what I've got.
+
+I think I might need to take a step back and try to simplify. For instance, I've
+currently got two ALUs, effectively -- one for register-immediate and one for
+register-register. They're never used on the same cycle.
+
+---
+
+Okay, starting to simplify by more closely mirroring my work on Dinky5 2+ years
+ago. I've figured something out.
+
+Partially implemented core costs:
+- 666 LCs with 32-bit PC, but
+- 396 LCs with 8-bit PC
+
+So, that's a lot of the size I'm seeing. Dinky5 used a shrunken PC.
+
+Why's PC so expensive?
+
+- Well there's PC+4, PC+IMMU, PC+IMMJ, PC+IMMB...
+- And the relevant muxes for selecting among them
+
+
+
+```
+1100011   Bxx         rs2
+0110011   ALU r-r     rs2
+0010011   ALU r-i     I-format immediate
+```
