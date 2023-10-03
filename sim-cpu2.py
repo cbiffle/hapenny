@@ -341,6 +341,14 @@ if __name__ == "__main__":
 
         store_cases = [
             ("SW", 0b010, 0xDEADBEEF, 0x12345678, 0, 0x12345678),
+
+            ("SB", 0b000, 0xDEADBEEF, 0x12345678, 0, 0xDEADBE78),
+            ("SB", 0b000, 0xDEADBEEF, 0x12345678, 1, 0xDEAD78EF),
+            ("SB", 0b000, 0xDEADBEEF, 0x12345678, 2, 0xDE78BEEF),
+            ("SB", 0b000, 0xDEADBEEF, 0x12345678, 3, 0x78ADBEEF),
+
+            ("SH", 0b001, 0xDEADBEEF, 0x12345678, 0, 0xDEAD5678),
+            ("SH", 0b001, 0xDEADBEEF, 0x12345678, 2, 0x5678BEEF),
         ]
         for mnem, opc, prevmem, write, off, expected in store_cases:
             desc = f"{mnem} x1, 0xAC(x2)"

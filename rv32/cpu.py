@@ -325,7 +325,7 @@ class Cpu(Component):
 
                                 do_fetch.eq(1),
                             ]
-                        with m.Case(0b010): # LW
+                        with m.Case("-1-"): # LW
                             m.d.comb += [
                                 # rd write set by default
                                 rf.write_cmd.payload.value.eq(self.mem_in.payload),
@@ -336,12 +336,18 @@ class Cpu(Component):
 
             with m.Case(UState.STORE):
                 with m.If(self.mem_out.ready == 1):
-                    m.d.sync += self.pc.eq(fetch_addr)
-                    with m.Switch(self.inst[12:15]):
-                        with m.Case(0b000): # SB
-                            repeated = Signal(32)
-                            m.d.comb += repeated.eq(rf.read_resp[:8].replicate(4))
-                            lanes = Signal(4)
+                    store_data = Signal(32)
+                    with m.Switch(self.inst[12:14]):
+                        with m.Case(0b00): # byte
+                            m.d.comb += store_data.eq(rf.read_resp[:8].replicate(4))
+                        with m.Case(0b01): # half
+                            m.d.comb += store_data.eq(rf.read_resp[:16].replicate(2))
+                        with m.Case("1-"): # word
+                            m.d.comb += store_data.eq(rf.read_resp)
+
+                    lanes = Signal(4)
+                    with m.Switch(self.inst[12:14]):
+                        with m.Case(0b00): # byte
                             with m.Switch(self.rs1[:2]):
                                 with m.Case(0b00):
                                     m.d.comb += lanes.eq(0b0001)
@@ -351,37 +357,23 @@ class Cpu(Component):
                                     m.d.comb += lanes.eq(0b0100)
                                 with m.Case(0b11):
                                     m.d.comb += lanes.eq(0b1000)
-                            m.d.comb += [
-                                self.mem_out.payload.addr.eq(self.rs1[2:]),
-                                self.mem_out.payload.data.eq(repeated),
-                                self.mem_out.payload.lanes.eq(lanes),
-                                self.mem_out.valid.eq(1),
-                            ]
-                            m.d.sync += self.ustate.eq(UState.FETCH)
-                        with m.Case(0b001): # SH
-                            repeated = Signal(32)
-                            m.d.comb += repeated.eq(rf.read_resp[:16].replicate(2))
-                            lanes = Signal(4)
-                            with m.Switch(self.rs1[:2]):
-                                with m.Case("0-"):
+                        with m.Case(0b01): # half
+                            with m.Switch(self.rs1[1]):
+                                with m.Case(0):
                                     m.d.comb += lanes.eq(0b0011)
-                                with m.Case("1-"):
+                                with m.Case(1):
                                     m.d.comb += lanes.eq(0b1100)
-                            m.d.comb += [
-                                self.mem_out.payload.addr.eq(self.rs1[2:]),
-                                self.mem_out.payload.data.eq(repeated),
-                                self.mem_out.payload.lanes.eq(lanes),
-                                self.mem_out.valid.eq(1),
-                            ]
-                            m.d.sync += self.ustate.eq(UState.FETCH)
-                        with m.Case(0b010): # SW
-                            m.d.comb += [
-                                self.mem_out.payload.addr.eq(self.rs1[2:]),
-                                self.mem_out.payload.data.eq(rf.read_resp),
-                                self.mem_out.payload.lanes.eq(0b1111),
-                                self.mem_out.valid.eq(1),
-                            ]
-                            m.d.sync += self.ustate.eq(UState.FETCH)
+                        with m.Case("1-"): # word
+                            m.d.comb += lanes.eq(0b1111)
+
+                    m.d.comb += [
+                        self.mem_out.payload.addr.eq(self.rs1[2:]),
+                        self.mem_out.payload.data.eq(store_data),
+                        self.mem_out.payload.lanes.eq(lanes),
+                        self.mem_out.valid.eq(1),
+                    ]
+                    m.d.sync += self.pc.eq(fetch_addr)
+                    m.d.sync += self.ustate.eq(UState.FETCH)
 
             with m.Case(UState.ALU_RR):
                 result = Signal(32)
