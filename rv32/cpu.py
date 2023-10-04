@@ -193,31 +193,42 @@ class Cpu(Component):
         store_ea = Signal(32)
         m.d.comb += store_ea.eq(rf.read_resp + imm_s)
         store_aligned = Signal(1)
-        store_val = Signal(32)
+        m.d.comb += store_aligned.eq(onehot_choice(inst_funct3_is, {
+            0b000: Const(1),
+            0b001: store_ea[0] == 0,
+            0b010: store_ea[:2] == 0,
+        }))
+        store_mask_before_shift = Signal(4)
         store_mask = Signal(4)
-        with m.Switch(inst_funct3):
-            with m.Case(0b010): # SW
-                m.d.comb += [
-                    store_aligned.eq(store_ea[:2] == 0),
-                    store_val.eq(self.rs2),
-                    store_mask.eq(Const(0b1111, 4) << store_ea[:2]),
-                ]
-            with m.Case("-00"): # SB/LBU
-                m.d.comb += [
-                    store_aligned.eq(1),
-                    store_val.eq(self.rs2[:8].replicate(4)),
-                    store_mask.eq(Const(1, 4) << store_ea[:2]),
-                ]
-            with m.Case("-01"): # SW/LWU
-                m.d.comb += [
-                    store_aligned.eq(store_ea[0] == 0),
-                    store_val.eq(self.rs2[:16].replicate(2)),
-                    store_mask.eq(Const(0b11, 4) << store_ea[:2]),
-                ]
-            with m.Default(): # 64 bit, etc
-                # when alignment checks are on, this will appear
-                # unaligned and fault.
-                pass
+        m.d.comb += [
+            store_mask_before_shift[0].eq(1),
+            store_mask_before_shift[1].eq(
+                inst_funct3_is[0b001] | inst_funct3_is[0b010]
+            ),
+            store_mask_before_shift[2].eq(inst_funct3_is[0b010]),
+            store_mask_before_shift[3].eq(inst_funct3_is[0b010]),
+
+            store_mask.eq(store_mask_before_shift << store_ea[:2]),
+        ]
+        store_val = Signal(32)
+        m.d.comb += [
+            store_val[:8].eq(self.rs2[:8]),
+            store_val[8:16].eq(mux(
+                inst_funct3_is[0b000],
+                self.rs2[:8],
+                self.rs2[8:16],
+            )),
+            store_val[16:24].eq(mux(
+                inst_funct3_is[0b000] | inst_funct3_is[0b001],
+                self.rs2[:8],
+                self.rs2[16:24],
+            )),
+            store_val[24:].eq(onehot_choice(inst_funct3_is, {
+                0b000: self.rs2[:8],
+                0b001: self.rs2[8:16],
+                0b010: self.rs2[24:],
+            })),
+        ]
 
         if not self.check_alignment:
             m.d.comb += store_aligned.eq(1)
