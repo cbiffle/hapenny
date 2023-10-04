@@ -178,16 +178,15 @@ class Cpu(Component):
         m.d.comb += load_ea.eq(rf.read_resp + imm_i)
         load_aligned = Signal(1)
         if self.check_alignment:
-            with m.Switch(inst_funct3):
-                with m.Case(0b010): # LW
-                    m.d.comb += load_aligned.eq(load_ea[:2] == 0)
-                with m.Case("-00"): # LB/LBU
-                    m.d.comb += load_aligned.eq(1)
-                with m.Case("-01"): # LW/LWU
-                    m.d.comb += load_aligned.eq(load_ea[0] == 0)
-                with m.Default(): # 64-bit, etc
-                    # this will appear unaligned.
-                    pass
+            m.d.comb += load_aligned.eq(onehot_choice(inst_funct3_is, {
+                0b000: Const(1),
+                0b100: Const(1),
+
+                0b001: load_ea[0] == 0,
+                0b101: load_ea[0] == 0,
+
+                0b010: load_ea[:2] == 0,
+            }))
         else:
             m.d.comb += load_aligned.eq(1)
 
@@ -521,19 +520,13 @@ class Cpu(Component):
                                                           self.load_lsbs)),
                 ]
                 load_result = Signal(32)
-                with m.Switch(size):
-                    with m.Case(0b00): # byte
-                        m.d.comb += load_result.eq(Cat(
-                            shifted[:8],
-                            (~zext & shifted[7]).replicate(24),
-                        ))
-                    with m.Case(0b01): # half
-                        m.d.comb += load_result.eq(Cat(
-                            shifted[:16],
-                            (~zext & shifted[15]).replicate(16),
-                        ))
-                    with m.Case(0b10): # word
-                        m.d.comb += load_result.eq(shifted)
+                m.d.comb += load_result.eq(onehot_choice(inst_funct3_is, {
+                    0b000: Cat(shifted[:8], (~zext & shifted[7]).replicate(24)),
+                    0b100: Cat(shifted[:8], (~zext & shifted[7]).replicate(24)),
+                    0b001: Cat(shifted[:16], (~zext & shifted[15]).replicate(16)),
+                    0b101: Cat(shifted[:16], (~zext & shifted[15]).replicate(16)),
+                    0b010: shifted,
+                }))
 
                 m.d.comb += [
                     rf.write_cmd.payload.value.eq(load_result),
