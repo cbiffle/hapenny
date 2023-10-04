@@ -249,20 +249,15 @@ class Cpu(Component):
         with m.Else():
             m.d.comb += signed_less_than.eq(difference[32])
 
-        base_taken = Signal(1)
-        with m.Switch(inst_funct3):
-            with m.Case("00-"): # EQ/NE
-                m.d.comb += base_taken.eq(rf.read_resp == self.rs2)
-            with m.Case("10-"): # LT/GE
-                m.d.comb += base_taken.eq(signed_less_than)
-            with m.Case("11-"): # LTU/GEU
-                m.d.comb += base_taken.eq(unsigned_less_than)
-            with m.Default(): # undefined comparisons
-                # will function as a nop, i.e. branch never
-                # taken
-                pass
-        branch_taken = base_taken ^ inst_funct3[0]
-
+        branch_taken = Signal(1)
+        m.d.comb += branch_taken.eq(onehot_choice(inst_funct3_is, {
+            0b000: rf.read_resp == self.rs2,
+            0b001: ~(rf.read_resp == self.rs2),
+            0b100: signed_less_than,
+            0b101: ~signed_less_than,
+            0b110: unsigned_less_than,
+            0b111: ~unsigned_less_than,
+        }))
 
         # Debug and status port wiring
         m.d.comb += [
