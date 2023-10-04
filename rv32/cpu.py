@@ -24,7 +24,7 @@ DebugPort = Signature({
 })
 
 def mux(select, one, zero):
-    n = one.shape().width
+    n = max(one.shape().width, zero.shape().width)
     select = select.any() # force to 1 bit
     return (
         (select.replicate(n) & one) | (~select.replicate(n) & zero)
@@ -32,17 +32,9 @@ def mux(select, one, zero):
 
 def onehot_choice(onehot_sig, options):
     assert len(options) > 0
-    width = None
-    for (choice, result) in options.items():
-        if width is not None:
-            assert result.shape().width == width,\
-                f"signal for choice {choice} is inconsistent width: {result} != {width}"
-        else:
-            width = result.shape().width
-
     output = None
     for (choice, result) in options.items():
-        case = onehot_sig[choice].replicate(width) & result
+        case = onehot_sig[choice].replicate(result.shape().width) & result
         if output is not None:
             output = output | case
         else:
