@@ -174,30 +174,22 @@ class Cpu(Component):
         # Default the read port to avoid having an additional "constant 0" mux option.
         m.d.comb += rf.read_cmd.payload.eq(inst_rs1)
 
-        load_ea = Signal(32)
-        m.d.comb += load_ea.eq(rf.read_resp + imm_i)
-        load_aligned = Signal(1)
+        loadstore_ea = Signal(32)
+        m.d.comb += loadstore_ea.eq(rf.read_resp + mux(self.inst[5], imm_s, imm_i))
+        ea_aligned = Signal(1)
         if self.check_alignment:
-            m.d.comb += load_aligned.eq(onehot_choice(inst_funct3_is, {
+            m.d.comb += ea_aligned.eq(onehot_choice(inst_funct3_is, {
                 0b000: Const(1),
                 0b100: Const(1),
 
-                0b001: load_ea[0] == 0,
-                0b101: load_ea[0] == 0,
+                0b001: loadstore_ea[0] == 0,
+                0b101: loadstore_ea[0] == 0,
 
-                0b010: load_ea[:2] == 0,
+                0b010: loadstore_ea[:2] == 0,
             }))
         else:
-            m.d.comb += load_aligned.eq(1)
+            m.d.comb += ea_aligned.eq(1)
 
-        store_ea = Signal(32)
-        m.d.comb += store_ea.eq(rf.read_resp + imm_s)
-        store_aligned = Signal(1)
-        m.d.comb += store_aligned.eq(onehot_choice(inst_funct3_is, {
-            0b000: Const(1),
-            0b001: store_ea[0] == 0,
-            0b010: store_ea[:2] == 0,
-        }))
         store_mask_before_shift = Signal(4)
         store_mask = Signal(4)
         m.d.comb += [
@@ -208,7 +200,7 @@ class Cpu(Component):
             store_mask_before_shift[2].eq(inst_funct3_is[0b010]),
             store_mask_before_shift[3].eq(inst_funct3_is[0b010]),
 
-            store_mask.eq(store_mask_before_shift << store_ea[:2]),
+            store_mask.eq(store_mask_before_shift << loadstore_ea[:2]),
         ]
         store_val = Signal(32)
         m.d.comb += [
@@ -229,9 +221,6 @@ class Cpu(Component):
                 0b010: self.rs2[24:],
             })),
         ]
-
-        if not self.check_alignment:
-            m.d.comb += store_aligned.eq(1)
 
         m.d.comb += self.mem_out.payload.data.eq(store_val)
 
@@ -394,11 +383,11 @@ class Cpu(Component):
 
                     with m.Case(0b00000_11):  # Lx
                         m.d.comb += [
-                            self.mem_out.payload.addr.eq(load_ea[2:]),
-                            self.mem_out.valid.eq(load_aligned),
+                            self.mem_out.payload.addr.eq(loadstore_ea[2:]),
+                            self.mem_out.valid.eq(ea_aligned),
                         ]
 
-                        with m.If(~load_aligned):
+                        with m.If(~ea_aligned):
                             m.d.comb += dying.eq(1)
 
                         with m.If(self.mem_out.ready if self.wait else 1):
@@ -407,16 +396,16 @@ class Cpu(Component):
                             m.d.comb += stalling.eq(1)
 
                         m.d.sync += [
-                            self.load_lsbs.eq(load_ea[:2]),
+                            self.load_lsbs.eq(loadstore_ea[:2]),
                         ]
 
                     with m.Case(0b01000_11):  # Sx
                         m.d.comb += [
                             self.mem_out.payload.lanes.eq(store_mask),
-                            self.mem_out.payload.addr.eq(store_ea[2:]),
-                            self.mem_out.valid.eq(store_aligned),
+                            self.mem_out.payload.addr.eq(loadstore_ea[2:]),
+                            self.mem_out.valid.eq(ea_aligned),
                         ]
-                        with m.If(~store_aligned):
+                        with m.If(~ea_aligned):
                             m.d.comb += dying.eq(1)
 
                         with m.If(self.mem_out.ready if self.wait else 1):
