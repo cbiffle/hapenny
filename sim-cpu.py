@@ -254,6 +254,10 @@ if __name__ == "__main__":
         uut.mem_in.payload,
     ]
 
+    verilog_src = verilog.convert(m, ports=ports)
+    with open("sim-cpu.v", "w") as v:
+        v.write(verilog_src)
+
     sim = Simulator(m)
     sim.add_clock(1e-6)
 
