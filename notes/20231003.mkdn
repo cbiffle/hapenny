@@ -85,4 +85,58 @@ Moving PC displacement immediate selection into decode step and sharing the PC
 adder across various control flow instructions: made shit bigger. But also
 faster.
 
+---
 
+Ah, shit, the icestick eval demo wasn't wiring up writes to lanes 2 and 3 of
+RAM. That likely explains some things. Doing so costs about 52 LUTs. :(
+
+However, that also seems to stop the synthesis tools from being excessively
+smart about RAM contents -- I now get the same results for a small program as I
+do for random bits. Still gonna eval with random bits tho.
+
+
+Noticed that the shift amount always comes from `comp_rhs`. Tried using the
+bottom 5 bits of `comp_rhs` as the shift amount during shifting, decrementing
+it. This makes things bigger. If I need a decrementer anyway, registering the
+output is very cheap.
+
+
+---
+
+Okay, so. With some incremental improvements, I've got the CPU in the following
+configuration:
+
+- 256-word memory (so 1024 byte, or 2 BRAMs).
+- PC width constrained to 10 (i.e. all of the 256-word memory space)
+- alignment checks, illegal instruction checks, and bus wait states ENABLED.
+- Full 32-register set.
+
+... fitting into 965 LCs, or 75% of an hx1k. (Turning off alignment checks: 934
+LCs.) Timing suggests a maximum clock rate of 46 MHz.
+
+Mostly I've been pulling logic that was conditional on state values / opcode
+_up,_ into the top level, so that its LUTs lose their conditional inputs. This
+has helped with both size and speed, though the speed's been tremendously
+variable.
+
+I think this is probably a more honest representation of the size of the core,
+whereas I think Dinky may have "optimized" itself.
+
+PicoRV32 doesn't post iCE40 synthesis results, but people are quoting ~1500 LUTs
+and saying it won't fit on an hx1k on Reddit. So, my core may be smaller, though
+of course picoRV32 implements some features I haven't, like interrupts.
+
+---
+
+Turns out some of the halt logic was being synthesized.
+
+- Applying a basic fix to that gets us down to 958 LCs (-7)
+- Disabling halting debug on icestick (it's not wired up!) gets us to... 968?
+  +10? Really?
+
+---
+
+Random thoughts on how to be smaller
+
+- Could probably get away with a 16-bit datapath.
+- 
