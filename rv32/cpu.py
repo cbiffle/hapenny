@@ -1,6 +1,7 @@
 from amaranth import *
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
+from amaranth.lib.coding import Encoder, Decoder
 
 from rv32 import StreamSig, AlwaysReady
 from rv32.regfile import RegFile
@@ -21,6 +22,34 @@ DebugPort = Signature({
     'pc': Out(32),
     'pc_write': Out(StreamSig(32)),
 })
+
+def mux(select, one, zero):
+    n = one.shape().width
+    select = select.any() # force to 1 bit
+    return (
+        (select.replicate(n) & one) | (~select.replicate(n) & zero)
+    )
+
+def onehot_choice(onehot_sig, options):
+    assert len(options) > 0
+    width = None
+    for (choice, result) in options.items():
+        if width is not None:
+            assert result.shape().width == width,\
+                f"signal for choice {choice} is inconsistent width: {result} != {width}"
+        else:
+            width = result.shape().width
+
+    output = None
+    for (choice, result) in options.items():
+        case = onehot_sig[choice].replicate(width) & result
+        if output is not None:
+            output = output | case
+        else:
+            output = case
+
+    return output
+
 
 
 class UState(Enum):
@@ -110,6 +139,11 @@ class Cpu(Component):
             inst_funct3.eq(self.inst[12:15]),
             inst_funct7.eq(self.inst[25:]),
         ]
+
+        # One-hot version of funct3
+        m.submodules.inst_funct3_decoder = Decoder(8)
+        inst_funct3_is = m.submodules.inst_funct3_decoder.o
+        m.d.comb += m.submodules.inst_funct3_decoder.i.eq(inst_funct3)
 
         # Immediate encodings
         imm_i = Signal(32)
