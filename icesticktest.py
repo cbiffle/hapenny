@@ -40,8 +40,8 @@ class TestMemory(Component):
             wp.data.eq(self.command.payload.data),
             wp.en[0].eq(self.command.valid & self.command.payload.lanes[0]),
             wp.en[1].eq(self.command.valid & self.command.payload.lanes[1]),
-            wp.en[0].eq(self.command.valid & self.command.payload.lanes[2]),
-            wp.en[1].eq(self.command.valid & self.command.payload.lanes[3]),
+            wp.en[2].eq(self.command.valid & self.command.payload.lanes[2]),
+            wp.en[3].eq(self.command.valid & self.command.payload.lanes[3]),
 
             # Nothing causes this memory to stop being available.
             self.command.ready.eq(1),
