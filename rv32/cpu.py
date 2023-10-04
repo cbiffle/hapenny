@@ -431,38 +431,39 @@ class Cpu(Component):
                         # signal; so far that hasn't affected synthesis results.
                         alu_result = Signal(32)
 
-                        with m.Switch(inst_funct3):
-                            with m.Case(0b000): # ADDI/ADD/SUB
-                                with m.If(opcode[5] & inst_funct7[5]):
-                                    m.d.comb += alu_result.eq(difference[:32])
-                                with m.Else():
-                                    m.d.comb += alu_result.eq(rs1 +
-                                                              self.comp_rhs)
+                        m.d.comb += alu_result.eq(onehot_choice(inst_funct3_is, {
+                            # ADDI/ADD/SUB
+                            0b000: mux(
+                                opcode[5] & inst_funct7[5],
+                                difference[:32],
+                                (rs1 + self.comp_rhs)[:32],
+                            ),
+                            # SLT(I)
+                            0b010: Cat(signed_less_than, Const(0, 31)),
+                            # SLTIU/SLTU
+                            0b011: Cat(unsigned_less_than, Const(0, 31)),
+                            # XORI/XOR
+                            0b100: rs1 ^ self.comp_rhs,
+                            # ORI/OR
+                            0b110: rs1 | self.comp_rhs,
+                            # ANDI/AND
+                            0b111: rs1 & self.comp_rhs,
+                        }))
 
-                            with m.Case(0b001): # SLLI/SLL
-                                m.d.comb += shifting.eq(1)
-                                m.d.sync += [
-                                    self.shift_amt.eq(self.comp_rhs[:5]),
-                                    self.rs2.eq(rs1),
-                                ]
-                            with m.Case(0b010): # SLTI/SLT
-                                m.d.comb += alu_result.eq(signed_less_than)
-                            with m.Case(0b011): # SLTIU/SLTU
-                                m.d.comb += alu_result.eq(unsigned_less_than)
-                            with m.Case(0b100): # XORI/XOR
-                                m.d.comb += alu_result.eq(rs1 ^ self.comp_rhs)
-                            with m.Case(0b101): # SRLI/SRL/SRAI/SRA
-                                m.d.comb += shifting.eq(1)
-                                m.d.sync += [
-                                    self.shift_fill.eq(rs1[31] &
-                                                       inst_funct7[5]),
-                                    self.shift_amt.eq(self.comp_rhs[:5]),
-                                    self.rs2.eq(rs1),
-                                ]
-                            with m.Case(0b110): # ORI/OR
-                                m.d.comb += alu_result.eq(rs1 | self.comp_rhs)
-                            with m.Case(0b111): # ANDI/AND
-                                m.d.comb += alu_result.eq(rs1 & self.comp_rhs)
+                        m.d.comb += shifting.eq(
+                            inst_funct3_is[0b001] # SLL(I)
+                            | inst_funct3_is[0b101] # SR(AL)(I)
+                        )
+                        with m.If(shifting):
+                            m.d.sync += [
+                                self.shift_amt.eq(self.comp_rhs[:5]),
+                                self.rs2.eq(rs1),
+                                self.shift_fill.eq(mux(
+                                    inst_funct3_is[0b101],
+                                    rs1[31] & inst_funct7[5],
+                                    Const(0),
+                                )),
+                            ]
 
                         m.d.comb += [
                             rf.write_cmd.payload.value.eq(alu_result),
