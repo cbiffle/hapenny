@@ -290,11 +290,11 @@ if __name__ == "__main__":
             "AUIPC x1, 0xAAAAA000",
             0b10101010101010101010_00001_0010111,
             before={
-                'PC': 0xCAFE,
+                'PC': 0xCAFC,
             },
             after={
-                1: 0xAAAB6AFE,
-                'PC': 0xCAFE + 4,
+                1: (0xAAAAA000 + 0xCAFC) & 0xFFFFFFFF,
+                'PC': 0xCAFC + 4,
             },
         )
 

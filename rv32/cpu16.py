@@ -94,10 +94,11 @@ class Cpu(Component):
 
     debug: In(DebugPort)
 
-    def __init__(self, *, addr_width = 32):
+    def __init__(self, *, addr_width = 32, relax_instruction_alignment = False):
         super().__init__()
 
         self.addr_width = addr_width
+        self.relax_instruction_alignment = relax_instruction_alignment
 
         self.ustate = Signal(UState, reset = UState.RESET) # TODO
         self.pc = Signal(addr_width)
@@ -218,6 +219,13 @@ class Cpu(Component):
             with m.Default(): # SW, SH
                 m.d.comb += store_mask.eq(0b11)
 
+        pc31_plus_1 = Signal(31)
+        if self.relax_instruction_alignment:
+            # have to use an adder here as we may go from 2-mod-4 to 0-mod-4
+            m.d.comb += pc31_plus_1.eq(self.pc[1:] + 1)
+        else:
+            m.d.comb += pc31_plus_1.eq(self.pc[1:] | 1)
+
         with m.Switch(self.ustate):
             with m.Case(UState.RESET):
                 m.d.sync += self.ustate.eq(UState.FETCH_LO)
@@ -237,7 +245,7 @@ class Cpu(Component):
             with m.Case(UState.FETCH_HI):
                 m.d.comb += [
                     self.mem_in.ready.eq(1),
-                    self.mem_out.payload.addr.eq(self.pc[1:] + 1),
+                    self.mem_out.payload.addr.eq(pc31_plus_1),
                     # Only issue a new request if our last one is completing.
                     self.mem_out.valid.eq(self.mem_in.valid),
                 ]
@@ -255,7 +263,7 @@ class Cpu(Component):
 
             with m.Case(UState.FETCH_HI_WAIT):
                 m.d.comb += [
-                    self.mem_out.payload.addr.eq(self.pc[1:] + 1),
+                    self.mem_out.payload.addr.eq(pc31_plus_1),
                     self.mem_out.valid.eq(1),
                 ]
 
