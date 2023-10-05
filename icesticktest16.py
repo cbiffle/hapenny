@@ -62,10 +62,7 @@ class Test(Elaboratable):
     def elaborate(self, platform):
         m = Module()
         m.submodules.cpu = cpu = Cpu(
-            #check_alignment = False,
-            #wait = False,
-            #pc_width = 10,
-            #allow_halt_request = False,
+            addr_width = 8,
         )
         random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
