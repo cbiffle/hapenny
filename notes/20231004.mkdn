@@ -1,0 +1,134 @@
+Starting to play with some more invasive techniques for reducing size.
+
+Saved 20 LUTs by converting basically all use of funct3 to one-hot. I think this
+is mostly working by converting a bunch of muxes to ORs. Gonna see if I can
+break down the savings.
+
+Converting load alignment detect logic: no immediate savings
+
+Also converting load result assembly logic: -8 LUTs
+
+Converting store logic: -3 LUTs
+
+Converting branch condition logic: -14 LUTs (!)
+
+Converting ALU result logic: -2 LUTs
+
+Switching PC immediate adder to use a muxed operand based on partially decoded
+opcode bits: +58 LUTs! fuuuuuck that
+
+Switching load and store EA computation and alignment checks to use common
+logic: -6 LUTs
+
+Centralizing load shifter to not be opcode sensitive: +3 LUTs
+
+---
+
+Merely switching state encoding to one-hot: +15 LUTs
+
+Honestly fewer than I expected
+
+---
+
+Wrote a new RV32I implementation (not including ALU ops, atm) using entirely
+structural one-hot primitives -- not an if or switch to be found -- and it's
+already at 821 LCs. 281 FFs.
+
+So, I think the "naive RV32" approach will tend to inherently approach 900-950
+LCs on iCE40.
+
+Wondering about alternative approaches I could use to synthesize something
+lighter without going all the way to bitserial. SERV's numbers are a good
+illustration of the cost of control logic: at 32+ more cycles per instruction,
+it's only about 1/3 the size.
+
+I keep thinking about a 16-bit datapath implementation, a la 68000. The iCE40's
+internal RAMs are 16-bit, so
+
+- Use one for a register file with separate entries for the high and low half of
+  each general purpose register (so, 64/256 entries consumed)
+- Use one as a 16-bit-wide RAM.
+- Operate in halfwords.
+
+Things like addition/subtraction/comparison would need carry flags to link one
+operation to the next. Shifts seem more interesting; it might be worth having an
+actual 32-bit shift register in an otherwise 16-bit implementation.
+
+Sketched execution of some instructions:
+
+```
+AUIPC x1, 0xAAAAA000
+
+1. Load low half of instruction from RAM.
+    - Note: have at this point: opcode, rd, funct3, low bit of rs1, some
+      immediate bits
+2. Load high half of instruction from RAM.
+    - Now we've got rs1 and rs2
+3. Add low half of PC to low half of U-type immediate. Set carry flag
+   appropriately. Write result to low half of rd.
+4. Add upper half of PC to upper half of U-type immediate and carry flag. Write
+   result to upper half of rd.
+   - In this cycle we could also begin instruction fetch at PC+4 and set it up
+     to latch into PC at end of cycle
+
+ADD x1, x2, x3
+
+1. Low fetch
+2. High fetch
+    - Can start addressing registers here
+3. Low half of a register becomes available, start fetching low half of the
+   other
+4. Low half of second register becomes available, start fetching high half of
+   the first. Set up the ALU to add the low halves and set carry. Write to low
+   half of destination.
+5. High half of first register becomes available, start fetching high half of
+   other
+6. High half of both registers available, set up the ALU to add the high halves
+   using saved carry. Write to high half of destination.
+```
+
+So if I could arrange things into a general pattern that doesn't require fully
+realized microcode, that'd rock. Candidate states:
+
+- Low Fetch
+- High Fetch and Register 2 Low Load
+- Register 1 Low Load
+- Low Operate, Register 2 High Load
+- Register 1 High Load
+- High Operate (normally overlapped with Low Fetch)
+
+For loads, one possible sequence is
+
+- Register 1 Low Load
+- Add low to immediate, register 1 high load. Latch result as low bits of EA.
+- Add high to immediate. Use result as high bits of EA. Issue load for first
+  halfword.
+- Write result into rd low once it comes back. If the load is a word load, issue
+  load for second halfword.
+- For word loads, write result into rd high, otherwise set or reset it according
+  to sign extension and contents of low halfword.
+
+Word stores might resemble
+
+- Register 1 Low Load
+- Add low to immediate, register 1 high load. Latch result as low bits of EA.
+- Add high to immediate. Use result as high bits of EA. Register 2 low load.
+- Issue store for low halfword. Register 2 high load. EA increment.
+- Issue store for high halfword.
+
+...while byte and halfword stores could skip the final cycle, if desired.
+
+The need to have the entire EA handy before making the low halfword store is a
+strong argument for loading rs1 before rs2, unlike in my 32-bit implementations
+that wind up being able to save time by doing it in the other order.
+
+If I can limit the EA to < 32 bits, the argument gets even stronger. In the
+extreme case, a core with a 16-bit physical address space could avoid dealing
+with the top half of rs1 in loads/stores entirely.
+
+
+Operating on RV32 immediates in 16-bit units means, effectively, twice as many
+possible immediate inputs into an adder. Assuming the same adder serves both top
+and bottom halfwords. Because if it doesn't ... what exactly am I doing
+
+

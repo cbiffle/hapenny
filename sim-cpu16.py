@@ -260,6 +260,8 @@ if __name__ == "__main__":
 
     ports = [
         phase,
+        uut.ustate,
+        uut.hi,
         uut.mem_out.valid,
         uut.mem_out.payload.addr,
         uut.mem_out.payload.data,

@@ -1,0 +1,170 @@
+Ok. Loads.
+
+Currently, by the time we get to OPERATE-HI, we have
+- The LSBs of the EA in `mar_lo`.
+- The MSBs of the EA on the adder output.
+
+We can put that on the bus and goto LOAD.
+
+If we're doing a halfword load,
+
+- Write the loaded value into the low half of the destination register.
+- Record the top bit somewhere (signed) or a zero (unsigned)
+- Fill the top half of the register with that value and goto fetch.
+
+If we're doing a byte load,
+- Write either the low or high byte (depending on the bottom bit of EA) into the
+  destination register's low half, clearing the top byte.
+- Record the top bit somewhere (signed) or a zero (unsigned)
+- Fill the top half of the register with that value and goto fetch.
+
+If we're doing a word load, things are more interesting. We need to issue a
+second memory transaction.
+
+The new EA will be two higher than the last one. However, if we require loads to
+be aligned, then all we have to do is bitwise-OR 2 into the EA. No adder
+required, no carry chain involved.
+
+So, we can go ahead and issue the load from `mar_lo` and the adder output, and
+then transition to a load high state that stores the result.
+
+---
+
+Muxes
+
+```
+adder_rhs
+    imm_u[15:0]
+    imm_u[31:16]
+    imm_j[15:0]
+    imm_j[31:16]
+    imm_i[15:0]
+    imm_i[31:16]
+    imm_s[15:0]
+    imm_s[31:16]
+    rf.read_resp
+    rf.read_resp ^ 16{inst[30]} (add/sub instruction only?)
+    ~rf.read_resp (compares)
+    imm_b[15:0]
+    imm_b[31:16]
+
+accum next
+    pc[15:0]
+    rf.read_resp
+    pc[31:16]
+accum[14:0], shift_lo[15]   (shift left)
+    shift_fill, accum[15:1]     (shift right)
+    16{load_result[15]} (for signed loads)
+    zero (for unsigned loads)
+    unchanged
+
+adder_carry_in
+    0   might be able to eliminate these constants by
+    1    flipping saved_carry
+    saved_carry
+    inst[30]
+
+saved carry next
+    0
+    adder carry out
+    unchanged (used to carry contents between operate phases)
+
+rf write payload
+    zeroes by default but probably not really used
+    immu[15:0]
+    adder_result
+    (pc+4)[15:0]
+    (pc+4)[15:0]
+    (pc+4)[31:16]
+    (pc+4)[31:16]
+    accum ^ reg
+    accum | reg
+    accum & reg
+    accum ^ imm_i[15:0]
+    accum | imm_i[15:0]
+    accum & imm_i[15:0]
+    accum^imm_i[31:16]
+    accum|imm_i[31:16]
+    accum&imm_i[31:16]
+    immu[31:16]
+    accum
+    load_result
+    shift_lo
+    zeroes (halted, not real)
+
+mem out payload addr
+    zeroes (fake)
+    pc[31:1]
+    pc[31:1] + 1
+    { adder_result, mar_lo[15:1] }
+    { adder_result, mar_lo[15:1] } | 1
+```
+
+states
+
+```
+lo              hi
+reset
+fetch_lo        fetch_hi
+inst_reg1_lo
+                fetch_hi_wait
+reg2_lo         reg2_hi
+operate_lo      operate_hi
+halted
+branch_lo       branch_hi
+load            load_hi
+                load_hi_wait
+                fill_msbs
+                store_hi
+finish_shift
+```
+
+---
+
+I feel like I could get this smaller by doing some more fixed-function stuff and
+possibly using more states/cycles.
+
+Also, decompose the state into, say, a state variable and a "active halfword"
+bit that determines whether we're operating high or low.
+
+```
+ALU x1, x2, x3 (not shift)
+
+fetch low halfword of instruction
+clear zero and carry flags
+
+low halfword of instruction available
+fetch high halfword of instruction
+latch low halfword into bottom half of inst
+
+high halfword of instruction available
+latch high halfword into top half of inst
+set up read of rs1.lo
+
+READ_RS2/LO
+rs1.lo available
+set up read of rs2.lo
+latch rs1.lo into accum
+
+OPERATE/LO
+rs2.lo available
+compute ALU result of (accum, rs2.lo)
+set up write of ALU result into rd.lo
+latch carry and zero output
+set up read of rs1.hi
+flip active to high
+
+READ_RS2/HI
+rs1.hi available
+set up read of rs2.hi
+latch rs1.hi into accum
+
+OPERATE/HI
+rs2.hi available
+compute ALU result of (accum, rs2.hi)
+set up write of ALU result into rd.hi
+latch carry and zero output
+flip active to low (toggle it?)
+
+increment PC
+```

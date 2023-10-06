@@ -1,0 +1,35 @@
+Alright, sprinting last night and this morning I have a revised state model
+working. This explicitly reuses logic between low and high halfwords where
+feasible, separating state into a (state, hi-halfword) pair. Otherwise it
+applies no aggressive optimization -- no one-hot state, no explicitly parallel
+logic.
+
+Currently: 786 LCs (61%)
+47 MHz
+
+CP: regfile -> adder RHS -> adder -> back to regfile? I think?
+
+Current instruction timings:
+
+```
+LUI     6
+AUIPC   6
+JAL     6
+JAL     6
+JALR    7
+Bxx     9 if taken
+        7 if not
+Lxx     9
+SW      8
+SB/SH   7
+
+ALU     7
+
+shift   9 + amount
+```
+
+So if we call 7 the average, we get 6.714 MIPS.
+
+In many cases I can probably knock a cycle off instructions, because I'm not
+currently doing overlapped fetch. But, that's not my current priority. My
+current priority is size.
