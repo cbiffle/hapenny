@@ -556,6 +556,18 @@ if __name__ == "__main__":
                 },
             )
 
+        for amt in [0, 1, 5, 31]:
+            yield from test_inst(
+                f"SLLI x1, x2, {amt}",
+                0b0000000_00000_00010_001_00001_0010011 | amt << 20,
+                before={
+                    2: 0xCAFEBABE,
+                },
+                after={
+                    1: (0xCAFEBABE << (amt & 0x1F)) & 0xFFFFFFFF,
+                },
+            )
+
         for amt in [0, 1, 5, 31, 32]:
             yield from test_inst(
                 f"SRL x1, x2, x3 (with x3={amt})",

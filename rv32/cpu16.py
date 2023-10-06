@@ -526,21 +526,30 @@ class Cpu(Component):
                                 self.ustate.eq(UState.REG2),
                             ]
 
-                    with m.Case(0b01100): # ALU register-register
+                    with m.Case("0-100"): # ALU register-register / register-imm
+                        # Note: opcode[3] is 1 for RR, 0 for RI.
                         m.d.comb += [
-                            adder_rhs.eq(rf.read_resp ^ self.inst[30].replicate(16)),
+                            adder_rhs.eq(mux(
+                                opcode[3],
+                                rf.read_resp ^ self.inst[30].replicate(16),
+                                mux(
+                                    self.hi,
+                                    imm_i[16:],
+                                    imm_i[:16],
+                                ),
+                            )),
                             adder_carry_in.eq(mux(
-                                self.hi,
+                                self.hi | ~opcode[3],
                                 saved_carry,
                                 self.inst[30],
                             )),
 
                             rf.write_cmd.valid.eq(1),
 
-                            # Start read of high half of rs1. this is only
+                            # Start read of other half of rs1. this is only
                             # useful on the lo phase but whatever.
                             rf.read_cmd.valid.eq(1),
-                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
+                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], ~self.hi)),
                         ]
                         with m.Switch(self.inst[12:15]):
                             with m.Case(0b000): # ADD/SUB
@@ -548,7 +557,7 @@ class Cpu(Component):
                                     rf.write_cmd.payload.value.eq(adder_result),
                                 ]
                             with m.Case(0b001, 0b101): # SLL, SRL, SRA
-                                pass # TODO
+                                pass # handled in SHIFT state
                             with m.Case(0b100): # XOR
                                 m.d.comb += [
                                     rf.write_cmd.payload.value.eq(self.accum ^
@@ -563,7 +572,6 @@ class Cpu(Component):
                                 m.d.comb += [
                                     rf.write_cmd.payload.value.eq(self.accum &
                                                                   adder_rhs),
-                                    rf.write_cmd.valid.eq(1),
                                 ]
                         with m.If(self.hi):
                             with m.If(self.inst[12:15].matches("-01")):
@@ -574,59 +582,14 @@ class Cpu(Component):
                         with m.Else():
                             m.d.sync += [
                                 # Record shift amount
-                                self.shift_amt.eq(rf.read_resp[:5]),
+                                self.shift_amt.eq(mux(
+                                    opcode[3],
+                                    rf.read_resp[:5],
+                                    self.inst[20:25],
+                                )),
                                 # Back up LSBs of rs1 into shifter
                                 self.shift_lo.eq(self.accum),
 
-                                self.ustate.eq(UState.REG2),
-                            ]
-
-                    with m.Case(0b00100): # ALU register-immediate
-                        m.d.comb += [
-                            adder_rhs.eq(mux(
-                                self.hi,
-                                imm_i[16:],
-                                imm_i[:16],
-                            )),
-                            adder_carry_in.eq(saved_carry),  # known to be 0
-                            rf.write_cmd.valid.eq(1),
-                            # Start read of other half of rs1
-                            rf.read_cmd.valid.eq(1),
-                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], ~self.hi)),
-                        ]
-                        with m.Switch(self.inst[12:15]):
-                            with m.Case(0b000): # ADD
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(adder_result),
-                                ]
-                            with m.Case(0b001, 0b101): # SLL, SRL, SRA
-                                m.d.sync += [
-                                    # Back up LSBs of rs1 into shifter
-                                    self.shift_lo.eq(self.accum),
-                                    # Record shift amount
-                                    self.shift_amt.eq(imm_i[:5]),
-                                ]
-                            with m.Case(0b100): # XOR
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(self.accum ^
-                                                                  adder_rhs),
-                                ]
-                            with m.Case(0b110): # OR
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(self.accum |
-                                                                  adder_rhs),
-                                ]
-                            with m.Case(0b111): # AND
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(self.accum &
-                                                                  adder_rhs),
-                                ]
-                        with m.If(self.hi):
-                            m.d.sync += [
-                                self.ustate.eq(UState.FETCH),
-                            ]
-                        with m.Else():
-                            m.d.sync += [
                                 self.ustate.eq(UState.REG2),
                             ]
 
