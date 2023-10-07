@@ -79,7 +79,8 @@ class UState(Enum):
     STORE = 10
     SHIFT = 11
     FINISH_SHIFT = 12
-    HALTED = 13
+    SLT = 13
+    HALTED = 14
 
 class Cpu(Component):
     mem_out: Out(StreamSig(MemCmd))
@@ -106,6 +107,8 @@ class Cpu(Component):
         self.mar_lo = Signal(16)
         self.shift_lo = Signal(16)
         self.shift_amt = Signal(5)
+        self.last_unsigned_less_than = Signal(1)
+        self.last_signed_less_than = Signal(1)
 
     def elaborate(self, platform):
         m = Module()
@@ -292,12 +295,11 @@ class Cpu(Component):
                     pass
 
             with m.Case(UState.REG2):
-                # lo(rs1) is now available on the register file output port.
+                # rs1 is now available on the register file output port.
                 # Latch it into the accumulator.
                 with m.Switch(opcode):
                     with m.Case(0b00101, 0b11011): # AUIPC, JAL
-                        # Load low half of program counter to prepare for
-                        # addition to immediate.
+                        # Load program counter instead.
                         m.d.sync += self.accum.eq(mux(
                             self.hi,
                             self.pc[16:],
@@ -309,20 +311,25 @@ class Cpu(Component):
                 # Set up a read of the second operand register.
                 m.d.comb += [
                     rf.read_cmd.valid.eq(1),
-                    rf.read_cmd.payload.eq(Cat(self.inst[20:25], self.hi & (opcode != 0b01000))), # overriden for store TODO
+                    rf.read_cmd.payload.eq(Cat(
+                        self.inst[20:25],
+                        self.hi & (opcode != 0b01000), # overriden for store TODO
+                    )),
                 ]
 
                 m.d.sync += self.ustate.eq(UState.OPERATE)
 
             with m.Case(UState.OPERATE):
+                # Overridden assignments:
                 m.d.comb += [
-                    rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi)),
                     adder_carry_in.eq(saved_carry),
                 ]
                 m.d.sync += [
-                    saved_carry.eq(adder_carry_out),
                     self.hi.eq(~self.hi),
                 ]
+                # Common assignments are at end of case to make it clear
+                # they're not being overridden.
+
                 with m.Switch(opcode):
                     with m.Case(0b01101): # LUI
                         m.d.comb += [
@@ -400,17 +407,17 @@ class Cpu(Component):
                             )),
                         ]
 
+                        m.d.comb += [
+                            # Start read of high half of rs1
+                            rf.read_cmd.valid.eq(1),
+                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
+                        ]
                         with m.If(self.hi):
                             m.d.sync += [
                                 self.pc.eq(Cat(self.shadow_pc, adder_result)),
                                 self.ustate.eq(UState.FETCH),
                             ]
                         with m.Else():
-                            m.d.comb += [
-                                # Start read of high half of rs1
-                                rf.read_cmd.valid.eq(1),
-                                rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
-                            ]
                             m.d.sync += [
                                 self.shadow_pc.eq(adder_result),
                                 self.ustate.eq(UState.REG2),
@@ -451,7 +458,6 @@ class Cpu(Component):
                                 imm_i[16:],
                                 imm_i[:16],
                             )),
-                            adder_carry_in.eq(saved_carry),
                         ]
                         # Start read of high half of rs1
                         m.d.comb += [
@@ -483,7 +489,6 @@ class Cpu(Component):
                                 imm_s[16:],
                                 imm_s[:16],
                             )),
-                            adder_carry_in.eq(saved_carry),
                         ]
                         with m.If(self.hi):
                             # Generate our memory transaction from our various bits.
@@ -558,6 +563,11 @@ class Cpu(Component):
                                 ]
                             with m.Case(0b001, 0b101): # SLL, SRL, SRA
                                 pass # handled in SHIFT state
+                            with m.Case(0b010, 0b011): # SLT, SLTU
+                                m.d.comb += [
+                                    adder_rhs.eq(~rf.read_resp),
+                                    adder_carry_in.eq(saved_carry | ~self.hi),
+                                ]
                             with m.Case(0b100): # XOR
                                 m.d.comb += [
                                     rf.write_cmd.payload.value.eq(self.accum ^
@@ -577,6 +587,8 @@ class Cpu(Component):
                             with m.If(self.inst[12:15].matches("-01")):
                                 m.d.sync += self.hi.eq(self.hi)
                                 m.d.sync += self.ustate.eq(UState.SHIFT)
+                            with m.Elif(self.inst[12:15].matches("01-")):
+                                m.d.sync += self.ustate.eq(UState.SLT)
                             with m.Else():
                                 m.d.sync += self.ustate.eq(UState.FETCH)
                         with m.Else():
@@ -592,6 +604,15 @@ class Cpu(Component):
 
                                 self.ustate.eq(UState.REG2),
                             ]
+                # OPERATE common assignments:
+                m.d.comb += [
+                    rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi)),
+                ]
+                m.d.sync += [
+                    saved_carry.eq(adder_carry_out),
+                    self.last_unsigned_less_than.eq(unsigned_less_than),
+                    self.last_signed_less_than.eq(signed_less_than),
+                ]
 
             with m.Case(UState.BRANCH):
                 m.d.comb += [
@@ -746,6 +767,28 @@ class Cpu(Component):
                     self.pc.eq(self.pc + 4),
                     self.ustate.eq(UState.FETCH),
                 ]
+
+            with m.Case(UState.SLT):
+                m.d.comb += [
+                    rf.write_cmd.payload.reg.eq(Cat(self.inst[7:12], self.hi)),
+                    rf.write_cmd.payload.value.eq(mux(
+                        self.hi,
+                        0,
+                        mux(
+                            self.inst[12],
+                            self.last_unsigned_less_than,
+                            self.last_signed_less_than,
+                        ),
+                    )),
+                    rf.write_cmd.valid.eq(1),
+                ]
+                m.d.sync += [
+                    self.hi.eq(~self.hi)
+                ]
+                with m.If(self.hi):
+                    m.d.sync += self.ustate.eq(UState.FETCH)
+                with m.Else():
+                    pass
 
             with m.Case(UState.HALTED):
                 with m.If(self.debug.pc_write.valid):
