@@ -10,6 +10,9 @@ from amaranth_boards.icestick import ICEStickPlatform
 from rv32 import StreamSig
 from rv32.cpu16 import Cpu, MemCmd
 
+RAM_WORDS = 256 * 1
+BUS_ADDR_BITS = (RAM_WORDS - 1).bit_length()
+
 class TestMemory(Component):
     command: In(StreamSig(MemCmd))
     response: Out(StreamSig(16))
@@ -19,7 +22,7 @@ class TestMemory(Component):
 
         self.m = Memory(
             width = 16,
-            depth = 256,
+            depth = RAM_WORDS,
             name = "testram",
             init = contents,
         )
@@ -62,11 +65,11 @@ class Test(Elaboratable):
     def elaborate(self, platform):
         m = Module()
         m.submodules.cpu = cpu = Cpu(
-            addr_width = 8,
+            addr_width = BUS_ADDR_BITS + 1,
         )
         random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
-            random.getrandbits(16) for _ in range(256)
+            random.getrandbits(16) for _ in range(RAM_WORDS)
             #0b00000000000000000000000000010011,
             #0b00000000000000000000000001100111,
             #0b10000000000000000000000000100011,
