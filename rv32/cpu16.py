@@ -228,8 +228,6 @@ class Cpu(Component):
                     )),
                     load_result[8:].eq(load_result[7].replicate(8)),
                 ]
-            with m.Case(0b001, 0b010, 0b101): # LH, LW, LHU
-                m.d.comb += load_result.eq(self.mem_in.payload)
             with m.Case(0b100): # LBU
                 m.d.comb += [
                     load_result[:8].eq(mux(
@@ -239,6 +237,8 @@ class Cpu(Component):
                     )),
                     load_result[8:].eq(0),
                 ]
+            with m.Default(): # LH, LW, LHU
+                m.d.comb += load_result.eq(self.mem_in.payload)
         store_data = Signal(16)
         with m.Switch(self.inst[12:15]):
             with m.Case(0b000): # SB
@@ -646,13 +646,15 @@ class Cpu(Component):
                 ]
 
                 with m.If(self.mem_in.valid):
-                    m.d.sync += self.hi.eq(~self.hi)
+                    m.d.sync += [
+                        self.hi.eq(~self.hi),
 
-                    m.d.sync += self.accum.eq(mux(
-                        funct3_is[0b000] | funct3_is[0b001],
-                        load_result[15].replicate(16),
-                        0,
-                    ))
+                        self.accum.eq(mux(
+                            funct3_is[0b000] | funct3_is[0b001],
+                            load_result[15].replicate(16),
+                            0,
+                        )),
+                    ]
 
                     with m.If(~self.hi):
                         with m.Switch(self.inst[12:15]):
@@ -726,9 +728,7 @@ class Cpu(Component):
                     )),
                 ]
                 with m.If(self.shift_amt == 0):
-                    m.d.comb += [
-                        rf.write_cmd.valid.eq(1),
-                    ]
+                    m.d.comb += rf.write_cmd.valid.eq(1)
                     m.d.sync += self.hi.eq(0)
                     with m.If(self.hi):
                         pass
