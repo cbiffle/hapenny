@@ -567,6 +567,9 @@ class Cpu(Component):
                                 m.d.comb += [
                                     adder_rhs.eq(~rf.read_resp),
                                     adder_carry_in.eq(saved_carry | ~self.hi),
+                                    # Clear both halves of register now, then
+                                    # fix the bottom one in SLT state later.
+                                    rf.write_cmd.payload.value.eq(0),
                                 ]
                             with m.Case(0b100): # XOR
                                 m.d.comb += [
@@ -771,24 +774,16 @@ class Cpu(Component):
             with m.Case(UState.SLT):
                 m.d.comb += [
                     rf.write_cmd.payload.reg.eq(Cat(self.inst[7:12], self.hi)),
-                    rf.write_cmd.payload.value.eq(mux(
-                        self.hi,
-                        0,
+                    rf.write_cmd.payload.value.eq(
                         mux(
                             self.inst[12],
                             self.last_unsigned_less_than,
                             self.last_signed_less_than,
                         ),
-                    )),
+                    ),
                     rf.write_cmd.valid.eq(1),
                 ]
-                m.d.sync += [
-                    self.hi.eq(~self.hi)
-                ]
-                with m.If(self.hi):
-                    m.d.sync += self.ustate.eq(UState.FETCH)
-                with m.Else():
-                    pass
+                m.d.sync += self.ustate.eq(UState.FETCH)
 
             with m.Case(UState.HALTED):
                 with m.If(self.debug.pc_write.valid):

@@ -7,7 +7,7 @@ logic.
 Currently: 786 LCs (61%)
 47 MHz
 
-CP: regfile -> adder RHS -> adder -> back to regfile? I think?
+CP: regfile -> adder RHS -> adder -> accumulator?
 
 Current instruction timings:
 
@@ -33,3 +33,18 @@ So if we call 7 the average, we get 6.714 MIPS.
 In many cases I can probably knock a cycle off instructions, because I'm not
 currently doing overlapped fetch. But, that's not my current priority. My
 current priority is size.
+
+Currently SLT/SLTU are not implemented, need to fix that. They're a little
+tricky because the LSB of the result depends on the MSBs of the input. Might
+need an auxiliary state for them. But, those being missing will be throwing off
+both my timing and area reports.
+
+---
+
+Okay. Got SLT/SLTU implemented, they wanted another state, works now.
+
+We're bigger: 831 LCs. (this is all still with `addr_width = 8`.)
+
+---
+
+Down to 825 with some simplifications in SLT.

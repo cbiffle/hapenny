@@ -480,7 +480,50 @@ if __name__ == "__main__":
             },
         )
 
-
+        yield from test_inst(
+            "SLT x1, x2, x3 (where x2 < x3)",
+            0b0000000_00011_00010_010_00001_0110011,
+            before={
+                2: 0xCAFEBABE,
+                3: 0x12345678,
+            },
+            after={
+                1: 1,
+            },
+        )
+        yield from test_inst(
+            "SLT x1, x2, x3 (where x2 >= x3)",
+            0b0000000_00011_00010_010_00001_0110011,
+            before={
+                2: 0x12345678,
+                3: 0xCAFEBABE,
+            },
+            after={
+                1: 0,
+            },
+        )
+        yield from test_inst(
+            "SLTU x1, x2, x3 (where x2 < x3)",
+            0b0000000_00011_00010_011_00001_0110011,
+            before={
+                2: 0x12345678,
+                3: 0xCAFEBABE,
+            },
+            after={
+                1: 1,
+            },
+        )
+        yield from test_inst(
+            "SLTU x1, x2, x3 (where x2 >= x3)",
+            0b0000000_00011_00010_011_00001_0110011,
+            before={
+                2: 0xCAFEBABE,
+                3: 0x12345678,
+            },
+            after={
+                1: 0,
+            },
+        )
         yield from test_inst(
             "ADDI x1, x2, 0x123",
             0b000100100011_00010_000_00001_0010011,
