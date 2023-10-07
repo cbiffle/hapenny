@@ -140,6 +140,8 @@ class Cpu(Component):
         m.d.comb += [
             opcode.eq(self.inst[2:7]),
             inst_rd.eq(self.inst[7:12]),
+        ]
+        m.d.sync += [
             is_auipc.eq(opcode == 0b00101),
             is_lui.eq(opcode == 0b01101),
             is_jal.eq(opcode == 0b11011),
