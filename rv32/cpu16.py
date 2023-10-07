@@ -230,6 +230,8 @@ class Cpu(Component):
             with m.Case(UState.RESET):
                 m.d.sync += self.ustate.eq(UState.FETCH)
 
+            # State in which we issue bus requests for the low and high halves
+            # of the instruction, and latch the low half.
             with m.Case(UState.FETCH):
                 m.d.comb += [
                     self.mem_out.payload.addr.eq(pc31_plus_hi),
@@ -239,31 +241,49 @@ class Cpu(Component):
                 m.d.sync += saved_zero.eq(1)
                 m.d.sync += saved_carry.eq(0)
                 m.d.sync += self.inst[:16].eq(self.mem_in.payload)
+                # This logic is a little subtle, but
+                # - We flip this flag on the low half if the bus is ready
+                #   because mem_out.valid is fixed high.
+                # - We flip this on the high half if the bus is ready and an
+                #   incoming transaction has appeared, because the latter gates our
+                #   assertion of mem_out.valid.
                 with m.If(self.mem_out.valid & self.mem_out.ready):
                     m.d.sync += self.hi.eq(~self.hi)
 
                 with m.If(~self.hi):
+                    # During the FETCH+lo state we will honor a halt request,
+                    # if present.
                     with m.If(self.halt_request):
                         m.d.sync += self.ustate.eq(UState.HALTED)
                     with m.Else():
+                        # Otherwise, we can generate a memory transaction
+                        # unconditionally, because we know we have somewhere to
+                        # put it.
                         m.d.comb += self.mem_out.valid.eq(1)
                 with m.Else():
-                    m.d.comb += [
-                        # Only issue a new request if our last one is completing.
-                        self.mem_out.valid.eq(self.mem_in.valid),
-                    ]
+                    # Forward the fetch completion to the valid signal.
+                    m.d.comb += self.mem_out.valid.eq(self.mem_in.valid)
 
+                    # If the low half of the fetch has completed...
                     with m.If(self.mem_in.valid):
+                        # And the bus is ready to accept our request for the
+                        # high half...
                         with m.If(self.mem_out.ready):
-                            # fetch-lo completed and fetch-hi has issued,
-                            # we can move on to...
+                            # ...then we can move on
                             m.d.sync += self.ustate.eq(UState.INST_REG1_LO)
                         with m.Else():
-                            # fetch-lo completed but fetch-hi has not been able to
-                            # issue. we need to hang out waiting for fetch-hi.
+                            # fetch-lo completed but fetch-hi has not been able
+                            # to issue. We've written the result to inst[:16]
+                            # above but can't transition to INST_REG1_LO until
+                            # we issue fetch-hi.
                             m.d.sync += self.ustate.eq(UState.FETCH_HI_WAIT)
 
+            # State entered when we were able to complete the low half of a
+            # fetch, but were not able to issue the high half.
+            #
+            # Only entered with hi==1
             with m.Case(UState.FETCH_HI_WAIT):
+                # Keep trying to issue the high half
                 m.d.comb += [
                     self.mem_out.payload.addr.eq(pc31_plus_hi),
                     self.mem_out.valid.eq(1),
@@ -274,6 +294,10 @@ class Cpu(Component):
                     m.d.sync += self.ustate.eq(UState.INST_REG1_LO)
                     m.d.sync += self.hi.eq(~self.hi)
 
+            # Latching the high half of the instruction and starting the read
+            # for rs1 low half.
+            #
+            # Only entered with hi==0
             with m.Case(UState.INST_REG1_LO):
                 with m.If(self.mem_in.valid):
                     # Hi half fetch is completing!
@@ -294,9 +318,13 @@ class Cpu(Component):
                     # do anything.
                     pass
 
+            # Latching half of rs1 and starting the read of the corresponding
+            # half of rs2, with some overrides below.
+            #
+            # This preserves self.hi and proceeds to OPERATE on the same half.
             with m.Case(UState.REG2):
-                # rs1 is now available on the register file output port.
-                # Latch it into the accumulator.
+                # rs1 (hi/lo) is now available on the register file output
+                # port. Latch it into the accumulator.
                 with m.Switch(opcode):
                     with m.Case(0b00101, 0b11011): # AUIPC, JAL
                         # Load program counter instead.
@@ -309,30 +337,34 @@ class Cpu(Component):
                         m.d.sync += self.accum.eq(rf.read_resp)
 
                 # Set up a read of the second operand register.
+                # TODO: store actually reads the opposing half of the second
+                # operand register, because reasons.
                 m.d.comb += [
                     rf.read_cmd.valid.eq(1),
                     rf.read_cmd.payload.eq(Cat(
                         self.inst[20:25],
-                        self.hi & (opcode != 0b01000), # overriden for store TODO
+                        self.hi & (opcode != 0b01000),
                     )),
                 ]
 
+                # We never have to stall in this state.
                 m.d.sync += self.ustate.eq(UState.OPERATE)
 
+            # Both operand halves are available and we can do some stuff.
+            #
+            # This generally toggles self.hi but there is an override below.
             with m.Case(UState.OPERATE):
                 # Overridden assignments:
-                m.d.comb += [
-                    adder_carry_in.eq(saved_carry),
-                ]
-                m.d.sync += [
-                    self.hi.eq(~self.hi),
-                ]
+                m.d.comb += adder_carry_in.eq(saved_carry)
+                m.d.sync += self.hi.eq(~self.hi)
                 # Common assignments are at end of case to make it clear
                 # they're not being overridden.
 
                 with m.Switch(opcode):
                     with m.Case(0b01101): # LUI
                         m.d.comb += [
+                            # This one's easy, we're just writing the immediate
+                            # unmodified.
                             rf.write_cmd.payload.value.eq(mux(
                                 self.hi,
                                 imm_u[16:],
@@ -340,13 +372,16 @@ class Cpu(Component):
                             )),
                             rf.write_cmd.valid.eq(1),
                         ]
-                        # We can jump directly to operate hi, no additional
-                        # register loads are required.
-                        with m.If(self.hi):
-                            m.d.sync += self.ustate.eq(UState.FETCH)
-                            m.d.sync += self.pc.eq(self.pc + 4)
-                        with m.Else():
+                        with m.If(~self.hi):
+                            # We can jump directly to operate hi, no additional
+                            # register loads are required.
                             m.d.sync += self.ustate.eq(UState.OPERATE)
+                        with m.Else():
+                            # Next instruction.
+                            m.d.sync += [
+                                self.ustate.eq(UState.FETCH),
+                                self.pc.eq(self.pc + 4),
+                            ]
                     with m.Case(0b00101): # AUIPC
                         m.d.comb += [
                             adder_rhs.eq(mux(
