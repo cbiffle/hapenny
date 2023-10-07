@@ -107,11 +107,11 @@ class Cpu(Component):
 
         self.ustate = Signal(UState, reset = UState.RESET) # TODO
         self.hi = Signal(1)
-        self.pc = Signal(addr_width)
+        self.pc = Signal(addr_width - 1)
         self.inst = Signal(32)
 
         self.accum = Signal(16)
-        self.shadow_pc = Signal(16)
+        self.shadow_pc = Signal(15)
         self.mar_lo = Signal(16)
         self.shift_lo = Signal(16)
         self.shift_amt = Signal(5)
@@ -123,8 +123,8 @@ class Cpu(Component):
 
         m.submodules.regfile = rf = RegFile16()
 
-        pc_plus_4 = Signal(self.addr_width)
-        m.d.comb += pc_plus_4.eq(self.pc + 4)
+        pc_plus_4 = Signal(self.addr_width - 1)
+        m.d.comb += pc_plus_4.eq(self.pc + 2)
 
         opcode = Signal(5)
         inst_rd = Signal(5)
@@ -177,7 +177,7 @@ class Cpu(Component):
 
         m.d.comb += [
             self.halted.eq(self.ustate == UState.HALTED),
-            self.debug.pc.eq(self.pc),
+            self.debug.pc.eq(Cat(0, self.pc)),
         ]
 
         adder_carry_in = Signal(1)
@@ -255,12 +255,12 @@ class Cpu(Component):
             with m.Default(): # SW, SH
                 m.d.comb += store_mask.eq(0b11)
 
-        pc31_plus_hi = Signal(31)
+        pc31_plus_hi = Signal(self.addr_width - 1)
         if self.relax_instruction_alignment:
             # have to use an adder here as we may go from 2-mod-4 to 0-mod-4
-            m.d.comb += pc31_plus_hi.eq(self.pc[1:] + self.hi)
+            m.d.comb += pc31_plus_hi.eq(self.pc + self.hi)
         else:
-            m.d.comb += pc31_plus_hi.eq(self.pc[1:] | self.hi)
+            m.d.comb += pc31_plus_hi.eq(self.pc | self.hi)
 
         with m.Switch(self.ustate):
             with m.Case(UState.RESET):
@@ -365,8 +365,8 @@ class Cpu(Component):
                     # Load program counter instead.
                     m.d.sync += self.accum.eq(mux(
                         self.hi,
-                        self.pc[16:],
-                        self.pc[:16],
+                        self.pc[15:],
+                        Cat(0, self.pc[:15]),
                     ))
                 with m.Elif(is_lui):
                     m.d.sync += self.accum.eq(0)
@@ -471,8 +471,8 @@ class Cpu(Component):
                     (is_auipc | is_lui, adder_result),
                     (is_jal | is_jalr, mux(
                         self.hi,
-                        (pc_plus_4)[16:],
-                        pc_plus_4,
+                        pc_plus_4[15:],
+                        Cat(0, pc_plus_4[:15]),
                     )),
                     (is_alu_rr | is_alu_ri, onehot_choice(funct3_is, {
                         0b000: adder_result,
@@ -516,14 +516,14 @@ class Cpu(Component):
                 # Assorted register update rules
 
                 m.d.sync += self.accum.eq(oneof([
-                    (is_auipc | is_jal, self.pc[16:]),
+                    (is_auipc | is_jal, self.pc[15:]),
                     (is_lui, 0),
-                    (is_b, self.pc[:16]),
+                    (is_b, Cat(0, self.pc[:15])),
                     (is_alu_ri | is_alu_rr, self.accum),
                 ]))
 
                 m.d.sync += [
-                    self.shadow_pc.eq(adder_result),
+                    self.shadow_pc.eq(adder_result[1:]),
 
                     saved_carry.eq(adder_carry_out),
                     saved_zero.eq(zero_out),
@@ -626,8 +626,8 @@ class Cpu(Component):
                     ]
                 with m.Else():
                     m.d.sync += [
-                        self.shadow_pc.eq(adder_result),
-                        self.accum.eq(self.pc[16:]),
+                        self.shadow_pc.eq(adder_result[1:]),
+                        self.accum.eq(self.pc[15:]),
                         self.ustate.eq(UState.BRANCH)
                     ]
 
@@ -777,7 +777,7 @@ class Cpu(Component):
 
             with m.Case(UState.HALTED):
                 with m.If(self.debug.pc_write.valid):
-                    m.d.sync += self.pc.eq(self.debug.pc_write.payload)
+                    m.d.sync += self.pc.eq(self.debug.pc_write.payload[1:])
 
                 m.d.comb += [
                     self.debug.reg_read.ready.eq(1),
