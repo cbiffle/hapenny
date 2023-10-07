@@ -393,25 +393,10 @@ class Cpu(Component):
             with m.Case(UState.OPERATE):
                 # This case is a giant box of assignments instead of a switch
                 # because it saves significant area.
-                m.d.comb += rf.write_cmd.valid.eq(
-                    is_auipc | is_lui | is_jal | is_jalr | is_alu_rr | is_alu_ri
-                )
-                m.d.comb += rf.write_cmd.payload.value.eq(oneof([
-                    (is_auipc | is_lui, adder_result),
-                    (is_jal | is_jalr, mux(
-                        self.hi,
-                        (pc_plus_4)[16:],
-                        pc_plus_4,
-                    )),
-                    (is_alu_rr | is_alu_ri, onehot_choice(funct3_is, {
-                        0b000: adder_result,
-                        0b010: 0,
-                        0b011: 0,
-                        0b100: self.accum ^ adder_rhs,
-                        0b110: self.accum | adder_rhs,
-                        0b111: self.accum & adder_rhs,
-                    })),
-                ]))
+
+                # Adder configuration
+
+                # Value used on right hand side:
                 m.d.comb += adder_rhs.eq(oneof([
                     (is_auipc | is_lui, mux(
                         self.hi,
@@ -453,19 +438,6 @@ class Cpu(Component):
                         ),
                     )),
                 ]))
-                m.d.comb += rf.read_cmd.valid.eq(oneof([
-                    (is_jalr | is_b | is_alu_rr | is_alu_ri | is_store, 1),
-                    (is_load, ~self.hi),
-                ]))
-                m.d.comb += rf.read_cmd.payload.eq(mux(
-                    is_store & self.hi,
-                    Cat(self.inst[20:25], 1),
-                    mux(
-                        is_alu_rr | is_alu_ri,
-                        Cat(self.inst[15:20], ~self.hi),
-                        Cat(self.inst[15:20], 1),
-                    ),
-                ))
                 m.d.comb += adder_carry_in.eq(oneof([
                     (is_b, saved_carry | ~self.hi),
                     (is_alu_ri, mux(
@@ -485,6 +457,51 @@ class Cpu(Component):
                     (is_auipc | is_lui | is_jal | is_jalr | is_load | is_store,
                      saved_carry),
                 ]))
+
+                # Register write behavior
+
+                # Instructions that write a register do so unconditionally:
+                m.d.comb += rf.write_cmd.valid.eq(
+                    is_auipc | is_lui | is_jal | is_jalr | is_alu_rr | is_alu_ri
+                )
+                # Register being written
+                m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
+                # Value written to a register:
+                m.d.comb += rf.write_cmd.payload.value.eq(oneof([
+                    (is_auipc | is_lui, adder_result),
+                    (is_jal | is_jalr, mux(
+                        self.hi,
+                        (pc_plus_4)[16:],
+                        pc_plus_4,
+                    )),
+                    (is_alu_rr | is_alu_ri, onehot_choice(funct3_is, {
+                        0b000: adder_result,
+                        0b010: 0, # important for SLT step
+                        0b011: 0, # important for SLT step
+                        0b100: self.accum ^ adder_rhs,
+                        0b110: self.accum | adder_rhs,
+                        0b111: self.accum & adder_rhs,
+                    })),
+                ]))
+
+                # Register read for next cycle
+
+                m.d.comb += rf.read_cmd.valid.eq(oneof([
+                    (is_jalr | is_b | is_alu_rr | is_alu_ri | is_store, 1),
+                    (is_load, ~self.hi),
+                ]))
+                m.d.comb += rf.read_cmd.payload.eq(mux(
+                    is_store & self.hi,
+                    Cat(self.inst[20:25], 1),
+                    mux(
+                        is_alu_rr | is_alu_ri,
+                        Cat(self.inst[15:20], ~self.hi),
+                        Cat(self.inst[15:20], 1),
+                    ),
+                ))
+
+                # Memory transaction generation
+
                 m.d.comb += self.mem_out.payload.addr.eq(
                     Cat(self.mar_lo, adder_result)[1:]
                 )
@@ -495,7 +512,8 @@ class Cpu(Component):
                 m.d.comb += self.mem_out.valid.eq(oneof([
                     (is_load | is_store, self.hi),
                 ]))
-                m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
+
+                # Assorted register update rules
 
                 m.d.sync += self.accum.eq(oneof([
                     (is_auipc | is_jal, self.pc[16:]),
@@ -504,15 +522,16 @@ class Cpu(Component):
                     (is_alu_ri | is_alu_rr, self.accum),
                 ]))
 
-                m.d.sync += self.shadow_pc.eq(adder_result)
-                m.d.sync += saved_zero.eq(zero_out)
+                m.d.sync += [
+                    self.shadow_pc.eq(adder_result),
 
-                m.d.sync += self.hi.eq(mux(
-                    (is_alu_rr | is_alu_ri) & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
-                    self.hi,
-                    ~self.hi,
-                ))
+                    saved_carry.eq(adder_carry_out),
+                    saved_zero.eq(zero_out),
+                    self.last_unsigned_less_than.eq(unsigned_less_than),
+                    self.last_signed_less_than.eq(signed_less_than),
+                ]
 
+                # Updates that only occur during hi phase:
                 with m.If(self.hi):
                     m.d.sync += self.pc.eq(oneof([
                         (is_auipc | is_lui, pc_plus_4),
@@ -530,6 +549,7 @@ class Cpu(Component):
                         (is_load | is_alu_rr | is_alu_ri, self.pc),
                     ]))
 
+                # Updates that only occur during low phase:
                 with m.If(~self.hi):
                     m.d.sync += self.mar_lo.eq(adder_result)
                     m.d.sync += self.shift_amt.eq(oneof([
@@ -537,6 +557,8 @@ class Cpu(Component):
                         (is_alu_rr, rf.read_resp[:5]),
                     ]))
                     m.d.sync += self.shift_lo.eq(self.accum)
+
+                # State transition logic
 
                 m.d.sync += self.ustate.eq(mux(
                     ~self.hi,
@@ -577,12 +599,12 @@ class Cpu(Component):
                         })),
                     ]),
                 ))
+                m.d.sync += self.hi.eq(mux(
+                    (is_alu_rr | is_alu_ri) & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
+                    self.hi,
+                    ~self.hi,
+                ))
 
-                m.d.sync += [
-                    saved_carry.eq(adder_carry_out),
-                    self.last_unsigned_less_than.eq(unsigned_less_than),
-                    self.last_signed_less_than.eq(signed_less_than),
-                ]
 
             with m.Case(UState.BRANCH):
                 m.d.comb += [
@@ -626,10 +648,11 @@ class Cpu(Component):
                 with m.If(self.mem_in.valid):
                     m.d.sync += self.hi.eq(~self.hi)
 
-                    with m.If(self.inst[12:15].matches("00-")):  # LB, LH
-                        m.d.sync += self.accum.eq(load_result[15].replicate(16))
-                    with m.Else():
-                        m.d.sync += self.accum.eq(0)
+                    m.d.sync += self.accum.eq(mux(
+                        funct3_is[0b000] | funct3_is[0b001],
+                        load_result[15].replicate(16),
+                        0,
+                    ))
 
                     with m.If(~self.hi):
                         with m.Switch(self.inst[12:15]):
