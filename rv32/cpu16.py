@@ -44,6 +44,10 @@ def onehot_choice(onehot_sig, options):
     for (choice, result) in options.items():
         if isinstance(choice, Enum):
             choice = choice.value
+        if isinstance(result, Enum):
+            result = result.value
+        if isinstance(result, int):
+            result = Const(result)
 
         case = onehot_sig[choice].replicate(result.shape().width) & result
         if output is not None:
@@ -57,6 +61,10 @@ def oneof(options):
     assert len(options) > 0
     output = None
     for (condition, result) in options:
+        if isinstance(result, Enum):
+            result = result.value
+        if isinstance(result, int):
+            result = Const(result)
         case = condition.any().replicate(result.shape().width) & result
         if output is not None:
             output = output | case
@@ -115,11 +123,39 @@ class Cpu(Component):
 
         m.submodules.regfile = rf = RegFile16()
 
+        pc_plus_4 = Signal(self.addr_width)
+        m.d.comb += pc_plus_4.eq(self.pc + 4)
+
         opcode = Signal(5)
         inst_rd = Signal(5)
+        is_auipc = Signal(1)
+        is_lui = Signal(1)
+        is_jal = Signal(1)
+        is_jalr = Signal(1)
+        is_b = Signal(1)
+        is_load = Signal(1)
+        is_store = Signal(1)
+        is_alu_rr = Signal(1)
+        is_alu_ri = Signal(1)
         m.d.comb += [
             opcode.eq(self.inst[2:7]),
             inst_rd.eq(self.inst[7:12]),
+            is_auipc.eq(opcode == 0b00101),
+            is_lui.eq(opcode == 0b01101),
+            is_jal.eq(opcode == 0b11011),
+            is_store.eq(opcode == 0b01000),
+            is_jalr.eq(opcode == 0b11001),
+            is_b.eq(opcode == 0b11000),
+            is_load.eq(opcode == 0b00000),
+            is_alu_rr.eq(opcode == 0b01100),
+            is_alu_ri.eq(opcode == 0b00100),
+        ]
+
+        m.submodules.funct3_is = Decoder(8)
+        funct3_is = Signal(8)
+        m.d.comb += [
+            m.submodules.funct3_is.i.eq(self.inst[12:15]),
+            funct3_is.eq(m.submodules.funct3_is.o),
         ]
 
         # Immediate encodings
@@ -325,16 +361,17 @@ class Cpu(Component):
             with m.Case(UState.REG2):
                 # rs1 (hi/lo) is now available on the register file output
                 # port. Latch it into the accumulator.
-                with m.Switch(opcode):
-                    with m.Case(0b00101, 0b11011): # AUIPC, JAL
-                        # Load program counter instead.
-                        m.d.sync += self.accum.eq(mux(
-                            self.hi,
-                            self.pc[16:],
-                            self.pc[:16],
-                        ))
-                    with m.Default():
-                        m.d.sync += self.accum.eq(rf.read_resp)
+                with m.If(is_auipc | is_jal):
+                    # Load program counter instead.
+                    m.d.sync += self.accum.eq(mux(
+                        self.hi,
+                        self.pc[16:],
+                        self.pc[:16],
+                    ))
+                with m.Elif(is_lui):
+                    m.d.sync += self.accum.eq(0)
+                with m.Else():
+                    m.d.sync += self.accum.eq(rf.read_resp)
 
                 # Set up a read of the second operand register.
                 # TODO: store actually reads the opposing half of the second
@@ -343,7 +380,7 @@ class Cpu(Component):
                     rf.read_cmd.valid.eq(1),
                     rf.read_cmd.payload.eq(Cat(
                         self.inst[20:25],
-                        self.hi & (opcode != 0b01000),
+                        self.hi & ~is_store,
                     )),
                 ]
 
@@ -354,298 +391,193 @@ class Cpu(Component):
             #
             # This generally toggles self.hi but there is an override below.
             with m.Case(UState.OPERATE):
-                # Overridden assignments:
-                m.d.comb += adder_carry_in.eq(saved_carry)
-                m.d.sync += self.hi.eq(~self.hi)
-                # Common assignments are at end of case to make it clear
-                # they're not being overridden.
+                # This case is a giant box of assignments instead of a switch
+                # because it saves significant area.
+                m.d.comb += rf.write_cmd.valid.eq(
+                    is_auipc | is_lui | is_jal | is_jalr | is_alu_rr | is_alu_ri
+                )
+                m.d.comb += rf.write_cmd.payload.value.eq(oneof([
+                    (is_auipc | is_lui, adder_result),
+                    (is_jal | is_jalr, mux(
+                        self.hi,
+                        (pc_plus_4)[16:],
+                        pc_plus_4,
+                    )),
+                    (is_alu_rr | is_alu_ri, onehot_choice(funct3_is, {
+                        0b000: adder_result,
+                        0b010: 0,
+                        0b011: 0,
+                        0b100: self.accum ^ adder_rhs,
+                        0b110: self.accum | adder_rhs,
+                        0b111: self.accum & adder_rhs,
+                    })),
+                ]))
+                m.d.comb += adder_rhs.eq(oneof([
+                    (is_auipc | is_lui, mux(
+                        self.hi,
+                        imm_u[16:],
+                        imm_u[:16],
+                    )),
+                    (is_jal, mux(
+                        self.hi,
+                        imm_j[16:],
+                        imm_j[:16],
+                    )),
+                    (is_b, ~rf.read_resp),
+                    (is_load | is_jalr, mux(
+                        self.hi,
+                        imm_i[16:],
+                        imm_i[:16],
+                    )),
+                    (is_store, mux(
+                        self.hi,
+                        imm_s[16:],
+                        imm_s[:16],
+                    )),
+                    (is_alu_rr, mux(
+                        funct3_is[0b010] | funct3_is[0b011], # SLTs
+                        ~rf.read_resp,
+                        rf.read_resp ^ self.inst[30].replicate(16),
+                    )),
+                    (is_alu_ri, mux(
+                        funct3_is[0b010] | funct3_is[0b011], # SLTs
+                        mux(
+                            self.hi,
+                            ~imm_i[16:],
+                            ~imm_i[:16],
+                        ),
+                        mux(
+                            self.hi,
+                            imm_i[16:],
+                            imm_i[:16],
+                        ),
+                    )),
+                ]))
+                m.d.comb += rf.read_cmd.valid.eq(oneof([
+                    (is_jalr | is_b | is_alu_rr | is_alu_ri | is_store, 1),
+                    (is_load, ~self.hi),
+                ]))
+                m.d.comb += rf.read_cmd.payload.eq(mux(
+                    is_store & self.hi,
+                    Cat(self.inst[20:25], 1),
+                    mux(
+                        is_alu_rr | is_alu_ri,
+                        Cat(self.inst[15:20], ~self.hi),
+                        Cat(self.inst[15:20], 1),
+                    ),
+                ))
+                m.d.comb += adder_carry_in.eq(oneof([
+                    (is_b, saved_carry | ~self.hi),
+                    (is_alu_ri, mux(
+                        funct3_is[0b010] | funct3_is[0b011], # SLTs
+                        saved_carry | ~self.hi,
+                        saved_carry,
+                    )),
+                    (is_alu_rr, mux(
+                        funct3_is[0b010] | funct3_is[0b011], # SLTs
+                        saved_carry | ~self.hi,
+                        mux(
+                            self.hi,
+                            saved_carry,
+                            self.inst[30],
+                        ),
+                    )),
+                    (is_auipc | is_lui | is_jal | is_jalr | is_load | is_store,
+                     saved_carry),
+                ]))
+                m.d.comb += self.mem_out.payload.addr.eq(
+                    Cat(self.mar_lo, adder_result)[1:]
+                )
+                m.d.comb += self.mem_out.payload.data.eq(store_data)
+                m.d.comb += self.mem_out.payload.lanes.eq(oneof([
+                    (is_store & self.hi, store_mask),
+                ]))
+                m.d.comb += self.mem_out.valid.eq(oneof([
+                    (is_load | is_store, self.hi),
+                ]))
+                m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
 
-                with m.Switch(opcode):
-                    with m.Case(0b01101): # LUI
-                        m.d.comb += [
-                            # This one's easy, we're just writing the immediate
-                            # unmodified.
-                            rf.write_cmd.payload.value.eq(mux(
-                                self.hi,
-                                imm_u[16:],
-                                imm_u[:16],
-                            )),
-                            rf.write_cmd.valid.eq(1),
-                        ]
-                        with m.If(~self.hi):
-                            # We can jump directly to operate hi, no additional
-                            # register loads are required.
-                            m.d.sync += self.ustate.eq(UState.OPERATE)
-                        with m.Else():
-                            # Next instruction.
-                            m.d.sync += [
-                                self.ustate.eq(UState.FETCH),
-                                self.pc.eq(self.pc + 4),
-                            ]
-                    with m.Case(0b00101): # AUIPC
-                        m.d.comb += [
-                            adder_rhs.eq(mux(
-                                self.hi,
-                                imm_u[16:],
-                                imm_u[:16],
-                            )),
-                            rf.write_cmd.payload.value.eq(adder_result),
-                            rf.write_cmd.valid.eq(1),
-                        ]
-                        with m.If(self.hi):
-                            m.d.sync += self.ustate.eq(UState.FETCH)
-                            m.d.sync += self.pc.eq(self.pc + 4)
-                        with m.Else():
-                            m.d.sync += self.ustate.eq(UState.OPERATE)
-                            m.d.sync += self.accum.eq(self.pc[16:])
+                m.d.sync += self.accum.eq(oneof([
+                    (is_auipc | is_jal, self.pc[16:]),
+                    (is_lui, 0),
+                    (is_b, self.pc[:16]),
+                    (is_alu_ri | is_alu_rr, self.accum),
+                ]))
 
-                    with m.Case(0b11011): # JAL
-                        m.d.comb += [
-                            rf.write_cmd.payload.value.eq(mux(
-                                self.hi,
-                                (self.pc + 4)[16:],
-                                self.pc + 4,
-                            )),
-                            rf.write_cmd.valid.eq(1),
+                m.d.sync += self.shadow_pc.eq(adder_result)
+                m.d.sync += saved_zero.eq(zero_out)
 
-                            adder_rhs.eq(mux(
-                                self.hi,
-                                imm_j[16:],
-                                imm_j[:16],
-                            )),
-                        ]
-                        with m.If(self.hi):
-                            m.d.sync += [
-                                self.pc.eq(Cat(self.shadow_pc, adder_result)),
-                                self.ustate.eq(UState.FETCH),
-                            ]
-                        with m.Else():
-                            m.d.sync += [
-                                self.shadow_pc.eq(adder_result),
-                                self.accum.eq(self.pc[16:]),
-                                self.ustate.eq(UState.OPERATE),
-                            ]
+                m.d.sync += self.hi.eq(mux(
+                    (is_alu_rr | is_alu_ri) & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
+                    self.hi,
+                    ~self.hi,
+                ))
 
-                    with m.Case(0b11001): # JALR
-                        m.d.comb += [
-                            rf.write_cmd.payload.value.eq(mux(
-                                self.hi,
-                                (self.pc + 4)[16:],
-                                self.pc + 4,
-                            )),
-                            rf.write_cmd.valid.eq(1),
+                with m.If(self.hi):
+                    m.d.sync += self.pc.eq(oneof([
+                        (is_auipc | is_lui, pc_plus_4),
+                        (is_jal | is_jalr, Cat(self.shadow_pc, adder_result)),
+                        (is_b, mux(
+                            branch_taken,
+                            self.pc,
+                            pc_plus_4,
+                        )),
+                        (is_store, mux(
+                            self.mem_out.ready & funct3_is[0b010],
+                            self.pc,
+                            pc_plus_4,
+                        )),
+                        (is_load | is_alu_rr | is_alu_ri, self.pc),
+                    ]))
 
-                            adder_rhs.eq(mux(
-                                self.hi,
-                                imm_i[16:],
-                                imm_i[:16],
-                            )),
-                        ]
+                with m.If(~self.hi):
+                    m.d.sync += self.mar_lo.eq(adder_result)
+                    m.d.sync += self.shift_amt.eq(oneof([
+                        (is_alu_ri, self.inst[20:25]),
+                        (is_alu_rr, rf.read_resp[:5]),
+                    ]))
+                    m.d.sync += self.shift_lo.eq(self.accum)
 
-                        m.d.comb += [
-                            # Start read of high half of rs1
-                            rf.read_cmd.valid.eq(1),
-                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
-                        ]
-                        with m.If(self.hi):
-                            m.d.sync += [
-                                self.pc.eq(Cat(self.shadow_pc, adder_result)),
-                                self.ustate.eq(UState.FETCH),
-                            ]
-                        with m.Else():
-                            m.d.sync += [
-                                self.shadow_pc.eq(adder_result),
-                                self.ustate.eq(UState.REG2),
-                            ]
-
-                    with m.Case(0b11000): # Bxx
-                        m.d.comb += [
-                            # Configure the adder to do a subtraction.
-                            adder_rhs.eq(~rf.read_resp),
-                            adder_carry_in.eq(saved_carry | ~self.hi),
-
-                            # Start read of high half of rs1
-                            rf.read_cmd.valid.eq(1),
-                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
-                        ]
-                        with m.If(self.hi):
-                            with m.If(branch_taken):
-                                m.d.sync += [
-                                    self.accum.eq(self.pc[:16]),
-                                    self.ustate.eq(UState.BRANCH),
-                                ]
-                            with m.Else():
-                                m.d.sync += [
-                                    self.pc.eq(self.pc + 4),
-                                    self.ustate.eq(UState.FETCH)
-                                ]
-                        with m.Else():
-                            m.d.comb += adder_carry_in.eq(1)
-                            m.d.sync += [
-                                saved_zero.eq(zero_out),
-                                self.ustate.eq(UState.REG2),
-                            ]
-
-                    with m.Case(0b00000): # Lx
-                        m.d.comb += [
-                            adder_rhs.eq(mux(
-                                self.hi,
-                                imm_i[16:],
-                                imm_i[:16],
-                            )),
-                        ]
-                        # Start read of high half of rs1
-                        m.d.comb += [
-                            rf.read_cmd.valid.eq(~self.hi),
-                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
-
-                            self.mem_out.payload.addr.eq(
-                                Cat(self.mar_lo, adder_result)[1:],
+                m.d.sync += self.ustate.eq(mux(
+                    ~self.hi,
+                    oneof([
+                        (is_auipc | is_lui | is_jal, UState.OPERATE),
+                        (is_jalr | is_b | is_load | is_store | is_alu_ri | is_alu_rr, UState.REG2),
+                    ]),
+                    oneof([
+                        (is_auipc | is_lui | is_jal | is_jalr, UState.FETCH),
+                        (is_b, mux(
+                            branch_taken,
+                            UState.BRANCH,
+                            UState.FETCH,
+                        )),
+                        (is_load, mux(
+                            self.mem_out.ready,
+                            UState.LOAD,
+                            self.ustate,
+                        )),
+                        (is_store, mux(
+                            self.mem_out.ready,
+                            mux(
+                                funct3_is[0b010],
+                                UState.STORE,
+                                UState.FETCH,
                             ),
-                        ]
-                        with m.If(self.hi):
-                            # Generate our memory transaction from our various bits:
-                            m.d.comb += self.mem_out.valid.eq(1)
-                            with m.If(self.mem_out.ready):
-                                m.d.sync += self.ustate.eq(UState.LOAD)
-                            with m.Else():
-                                # wait for the bus
-                                pass
-                        with m.Else():
-                            m.d.sync += [
-                                self.mar_lo.eq(adder_result),
-                                self.ustate.eq(UState.REG2),
-                            ]
+                            self.ustate,
+                        )),
+                        (is_alu_ri | is_alu_rr, onehot_choice(funct3_is, {
+                            0b000: UState.FETCH,
+                            0b001: UState.SHIFT,
+                            0b010: UState.SLT,
+                            0b011: UState.SLT,
+                            0b100: UState.FETCH,
+                            0b101: UState.SHIFT,
+                            0b110: UState.FETCH,
+                            0b111: UState.FETCH,
+                        })),
+                    ]),
+                ))
 
-                    with m.Case(0b01000): # Sx
-                        m.d.comb += [
-                            adder_rhs.eq(mux(
-                                self.hi,
-                                imm_s[16:],
-                                imm_s[:16],
-                            )),
-                        ]
-                        with m.If(self.hi):
-                            # Generate our memory transaction from our various bits.
-                            m.d.comb += [
-                                self.mem_out.valid.eq(1),
-                                self.mem_out.payload.addr.eq(
-                                    Cat(self.mar_lo, adder_result)[1:],
-                                ),
-                                self.mem_out.payload.data.eq(store_data),
-                                self.mem_out.payload.lanes.eq(store_mask),
-                            ]
-                            # Set up a read of hi(rs2). We'll ignore it if we're not
-                            # doing a word store.
-                            m.d.comb += [
-                                rf.read_cmd.payload.eq(Cat(self.inst[20:25], 1)),
-                                rf.read_cmd.valid.eq(1),
-                            ]
-                            with m.If(self.mem_out.ready):
-                                with m.If(self.inst[12:15] == 0b010):
-                                    # Word store!
-                                    m.d.sync += self.ustate.eq(UState.STORE)
-                                with m.Else():
-                                    # Smaller store -- we're done
-                                    m.d.sync += [
-                                        self.pc.eq(self.pc + 4),
-                                        self.ustate.eq(UState.FETCH),
-                                    ]
-                            with m.Else():
-                                # wait for the bus
-                                pass
-
-                        with m.Else():
-                            # Start read of high half of rs1
-                            m.d.comb += [
-                                rf.read_cmd.valid.eq(1),
-                                rf.read_cmd.payload.eq(Cat(self.inst[15:20], 1)),
-                            ]
-                            m.d.sync += [
-                                self.mar_lo.eq(adder_result),
-                                self.ustate.eq(UState.REG2),
-                            ]
-
-                    with m.Case("0-100"): # ALU register-register / register-imm
-                        # Note: opcode[3] is 1 for RR, 0 for RI.
-                        m.d.comb += [
-                            adder_rhs.eq(mux(
-                                opcode[3],
-                                rf.read_resp ^ self.inst[30].replicate(16),
-                                mux(
-                                    self.hi,
-                                    imm_i[16:],
-                                    imm_i[:16],
-                                ),
-                            )),
-                            adder_carry_in.eq(mux(
-                                self.hi | ~opcode[3],
-                                saved_carry,
-                                self.inst[30],
-                            )),
-
-                            rf.write_cmd.valid.eq(1),
-
-                            # Start read of other half of rs1. this is only
-                            # useful on the lo phase but whatever.
-                            rf.read_cmd.valid.eq(1),
-                            rf.read_cmd.payload.eq(Cat(self.inst[15:20], ~self.hi)),
-                        ]
-                        with m.Switch(self.inst[12:15]):
-                            with m.Case(0b000): # ADD/SUB
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(adder_result),
-                                ]
-                            with m.Case(0b001, 0b101): # SLL, SRL, SRA
-                                pass # handled in SHIFT state
-                            with m.Case(0b010, 0b011): # SLT, SLTU
-                                m.d.comb += [
-                                    adder_rhs.eq(~rf.read_resp),
-                                    adder_carry_in.eq(saved_carry | ~self.hi),
-                                    # Clear both halves of register now, then
-                                    # fix the bottom one in SLT state later.
-                                    rf.write_cmd.payload.value.eq(0),
-                                ]
-                            with m.Case(0b100): # XOR
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(self.accum ^
-                                                                  adder_rhs),
-                                ]
-                            with m.Case(0b110): # OR
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(self.accum |
-                                                                  adder_rhs),
-                                ]
-                            with m.Case(0b111): # AND
-                                m.d.comb += [
-                                    rf.write_cmd.payload.value.eq(self.accum &
-                                                                  adder_rhs),
-                                ]
-                        with m.If(self.hi):
-                            with m.If(self.inst[12:15].matches("-01")):
-                                m.d.sync += self.hi.eq(self.hi)
-                                m.d.sync += self.ustate.eq(UState.SHIFT)
-                            with m.Elif(self.inst[12:15].matches("01-")):
-                                m.d.sync += self.ustate.eq(UState.SLT)
-                            with m.Else():
-                                m.d.sync += self.ustate.eq(UState.FETCH)
-                        with m.Else():
-                            m.d.sync += [
-                                # Record shift amount
-                                self.shift_amt.eq(mux(
-                                    opcode[3],
-                                    rf.read_resp[:5],
-                                    self.inst[20:25],
-                                )),
-                                # Back up LSBs of rs1 into shifter
-                                self.shift_lo.eq(self.accum),
-
-                                self.ustate.eq(UState.REG2),
-                            ]
-                # OPERATE common assignments:
-                m.d.comb += [
-                    rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi)),
-                ]
                 m.d.sync += [
                     saved_carry.eq(adder_carry_out),
                     self.last_unsigned_less_than.eq(unsigned_less_than),
@@ -714,7 +646,7 @@ class Cpu(Component):
                                 m.d.sync += self.ustate.eq(UState.FILL_MSBS)
                     with m.Else():
                         m.d.sync += [
-                            self.pc.eq(self.pc + 4),
+                            self.pc.eq(pc_plus_4),
                             self.ustate.eq(UState.FETCH),
                         ]
 
@@ -744,7 +676,7 @@ class Cpu(Component):
                 ]
                 with m.If(self.mem_out.ready):
                     m.d.sync += [
-                        self.pc.eq(self.pc + 4),
+                        self.pc.eq(pc_plus_4),
                         self.ustate.eq(UState.FETCH),
                     ]
 
@@ -755,7 +687,7 @@ class Cpu(Component):
                     rf.write_cmd.valid.eq(1),
                 ]
                 m.d.sync += [
-                    self.pc.eq(self.pc + 4),
+                    self.pc.eq(pc_plus_4),
                     self.ustate.eq(UState.FETCH),
                     self.hi.eq(~self.hi),
                 ]
@@ -802,7 +734,7 @@ class Cpu(Component):
                     rf.write_cmd.valid.eq(1),
                 ]
                 m.d.sync += [
-                    self.pc.eq(self.pc + 4),
+                    self.pc.eq(pc_plus_4),
                     self.ustate.eq(UState.FETCH),
                 ]
 

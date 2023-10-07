@@ -586,6 +586,46 @@ if __name__ == "__main__":
             },
         )
 
+        yield from test_inst(
+            "SLTI x1, x2, 0x123 (where x2 < 0x123)",
+            0b001100100001_00010_010_00001_0010011,
+            before={
+                2: 0xCAFEBABE,
+            },
+            after={
+                1: 1,
+            },
+        )
+        yield from test_inst(
+            "SLTI x1, x2, 0x123 (where x2 >= 0x123)",
+            0b001100100001_00010_010_00001_0010011,
+            before={
+                2: 0x12345678,
+            },
+            after={
+                1: 0,
+            },
+        )
+        yield from test_inst(
+            "SLTIU x1, x2, 0x123 (where x2 < 0x123)",
+            0b001100100001_00010_011_00001_0010011,
+            before={
+                2: 0x42,
+            },
+            after={
+                1: 1,
+            },
+        )
+        yield from test_inst(
+            "SLTIU x1, x2, 0x123 (where x2 >= 0x123)",
+            0b001100100001_00010_011_00001_0010011,
+            before={
+                2: 0xCAFEBABE,
+            },
+            after={
+                1: 0,
+            },
+        )
         for amt in [0, 1, 5, 31, 32]:
             yield from test_inst(
                 f"SLL x1, x2, x3 (with x3={amt})",
