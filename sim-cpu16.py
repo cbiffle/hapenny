@@ -115,9 +115,13 @@ def resume():
 
 def single_step():
     yield from resume()
-    # skip FETCH state
+    start = yield cycle_counter
+    # do not generate halt during fetch state
     yield
     yield from halt()
+    # Subtract 1 here to exclude the trailing fetch state where the halt was
+    # acknowledged.
+    return (yield cycle_counter) - 1 - start
 
 def write_ureg(reg, value):
     yield uut.debug.reg_write.payload.addr.eq(reg)
@@ -207,7 +211,9 @@ def test_inst(name, inst, *, before = {}, after = {}):
     yield from write_pc(start_address)
 
     yield phase.eq(TestPhase.RUN)
-    yield from single_step()
+    cycle_count = yield from single_step()
+
+    print(f"({cycle_count} cyc) ", end='')
 
     yield phase.eq(TestPhase.CHECK)
     try:
@@ -262,6 +268,8 @@ if __name__ == "__main__":
     ])
 
     phase = Signal(TestPhase)
+    cycle_counter = Signal(32)
+    m.d.sync += cycle_counter.eq(cycle_counter + 1)
 
     m.submodules.bus = fabric = SimpleFabric([
         partial_decode(m, mem.bus, 31),
