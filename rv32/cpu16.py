@@ -557,7 +557,7 @@ class Cpu(Component):
                 # Updates that only occur during hi phase:
                 with m.If(self.hi):
                     m.d.sync += self.pc.eq(oneof([
-                        (is_auipc_or_lui, pc_plus_4),
+                        (is_auipc_or_lui | is_alu_rr | is_alu_ri, pc_plus_4),
                         (is_jal | is_jalr, Cat(self.shadow_pc, adder_result)),
                         (is_b, mux(
                             branch_taken,
@@ -569,7 +569,7 @@ class Cpu(Component):
                             self.pc,
                             pc_plus_4,
                         )),
-                        (is_load | is_alu_rr | is_alu_ri, self.pc),
+                        (is_load, self.pc),
                     ]))
 
                 # Updates that only occur during low phase:

@@ -236,6 +236,12 @@ def test_inst(name, inst, *, before = {}, after = {}):
                 actual = yield from read_reg(r)
                 assert actual == expected, \
                     f"r{r} should not have changed but is now 0x{actual:x}"
+        if 'PC' not in after:
+            actual = yield from read_pc()
+            value = start_address + 4
+            assert actual == value, \
+                    f"PC should be 0x{value:x} but is 0x{actual:x}"
+
 
 
 
