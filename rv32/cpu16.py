@@ -90,6 +90,17 @@ class UState(Enum):
     SLT = 13
     HALTED = 14
 
+class Opcode(Enum):
+    LUI = 0b01101
+    AUIPC = 0b00101
+    JAL = 0b11011
+    JALR = 0b11001
+    Bxx = 0b11000
+    Lxx = 0b00000
+    Sxx = 0b01000
+    ALUIMM = 0b00100
+    ALUREG = 0b01100
+
 class Cpu(Component):
     mem_out: Out(StreamSig(MemCmd))
     mem_in: In(StreamSig(16))
@@ -130,27 +141,22 @@ class Cpu(Component):
         inst_rd = Signal(5)
         is_auipc = Signal(1)
         is_lui = Signal(1)
+        is_auipc_or_lui = Signal(1)
         is_jal = Signal(1)
         is_jalr = Signal(1)
         is_b = Signal(1)
         is_load = Signal(1)
+        is_load_or_jalr = Signal(1)
         is_store = Signal(1)
         is_alu_rr = Signal(1)
         is_alu_ri = Signal(1)
+        is_imm_i = Signal(1)
+        is_neg_imm_i = Signal(1)
+        is_neg_reg_to_adder = Signal(1)
+        is_reg_to_adder = Signal(1)
         m.d.comb += [
             opcode.eq(self.inst[2:7]),
             inst_rd.eq(self.inst[7:12]),
-        ]
-        m.d.sync += [
-            is_auipc.eq(opcode == 0b00101),
-            is_lui.eq(opcode == 0b01101),
-            is_jal.eq(opcode == 0b11011),
-            is_store.eq(opcode == 0b01000),
-            is_jalr.eq(opcode == 0b11001),
-            is_b.eq(opcode == 0b11000),
-            is_load.eq(opcode == 0b00000),
-            is_alu_rr.eq(opcode == 0b01100),
-            is_alu_ri.eq(opcode == 0b00100),
         ]
 
         m.submodules.funct3_is = Decoder(8)
@@ -158,6 +164,36 @@ class Cpu(Component):
         m.d.comb += [
             m.submodules.funct3_is.i.eq(self.inst[12:15]),
             funct3_is.eq(m.submodules.funct3_is.o),
+        ]
+
+
+        m.d.sync += [
+            is_auipc.eq(opcode == Opcode.AUIPC),
+            is_lui.eq(opcode == Opcode.LUI),
+            is_auipc_or_lui.eq((opcode == Opcode.LUI) | (opcode == Opcode.AUIPC)),
+            is_jal.eq(opcode == Opcode.JAL),
+            is_store.eq(opcode == Opcode.Sxx),
+            is_jalr.eq(opcode == Opcode.JALR),
+            is_b.eq(opcode == Opcode.Bxx),
+            is_load.eq(opcode == Opcode.Lxx),
+            is_load_or_jalr.eq((opcode == Opcode.Lxx) | (opcode == Opcode.JALR)),
+            is_alu_rr.eq(opcode == Opcode.ALUREG),
+            is_alu_ri.eq(opcode == Opcode.ALUIMM),
+
+            is_imm_i.eq(
+                (opcode == Opcode.Lxx) | (opcode == Opcode.JALR)
+                | ((opcode == Opcode.ALUIMM) & ~(funct3_is[0b010] | funct3_is[0b011]))
+            ),
+            is_neg_imm_i.eq(
+                (opcode == Opcode.ALUIMM) & (funct3_is[0b010] | funct3_is[0b011])
+            ),
+            is_neg_reg_to_adder.eq(
+                (opcode == Opcode.Bxx)
+                | ((opcode == Opcode.ALUREG) & (funct3_is[0b010] | funct3_is[0b011]))
+            ),
+            is_reg_to_adder.eq(
+                ((opcode == Opcode.ALUREG) & ~(funct3_is[0b010] | funct3_is[0b011]))
+            ),
         ]
 
         # Immediate encodings
@@ -195,6 +231,35 @@ class Cpu(Component):
                                                   adder_carry_in),
             zero_out.eq(saved_zero & (adder_result == 0)),
         ]
+        m.d.comb += adder_rhs.eq(oneof([
+            (is_auipc_or_lui, mux(
+                self.hi,
+                imm_u[16:],
+                imm_u[:16],
+            )),
+            (is_jal, mux(
+                self.hi,
+                imm_j[16:],
+                imm_j[:16],
+            )),
+            (is_neg_reg_to_adder, ~rf.read_resp),
+            (is_imm_i, mux(
+                self.hi,
+                imm_i[16:],
+                imm_i[:16],
+            )),
+            (is_store, mux(
+                self.hi,
+                imm_s[16:],
+                imm_s[:16],
+            )),
+            (is_reg_to_adder, rf.read_resp ^ self.inst[30].replicate(16)),
+            (is_neg_imm_i, mux(
+                self.hi,
+                ~imm_i[16:],
+                ~imm_i[:16],
+            )),
+        ]))
 
         signed_less_than = Signal(1)
         unsigned_less_than = Signal(1)
@@ -399,47 +464,6 @@ class Cpu(Component):
                 # Adder configuration
 
                 # Value used on right hand side:
-                m.d.comb += adder_rhs.eq(oneof([
-                    (is_auipc | is_lui, mux(
-                        self.hi,
-                        imm_u[16:],
-                        imm_u[:16],
-                    )),
-                    (is_jal, mux(
-                        self.hi,
-                        imm_j[16:],
-                        imm_j[:16],
-                    )),
-                    (is_b, ~rf.read_resp),
-                    (is_load | is_jalr, mux(
-                        self.hi,
-                        imm_i[16:],
-                        imm_i[:16],
-                    )),
-                    (is_store, mux(
-                        self.hi,
-                        imm_s[16:],
-                        imm_s[:16],
-                    )),
-                    (is_alu_rr, mux(
-                        funct3_is[0b010] | funct3_is[0b011], # SLTs
-                        ~rf.read_resp,
-                        rf.read_resp ^ self.inst[30].replicate(16),
-                    )),
-                    (is_alu_ri, mux(
-                        funct3_is[0b010] | funct3_is[0b011], # SLTs
-                        mux(
-                            self.hi,
-                            ~imm_i[16:],
-                            ~imm_i[:16],
-                        ),
-                        mux(
-                            self.hi,
-                            imm_i[16:],
-                            imm_i[:16],
-                        ),
-                    )),
-                ]))
                 m.d.comb += adder_carry_in.eq(oneof([
                     (is_b, saved_carry | ~self.hi),
                     (is_alu_ri, mux(
@@ -456,7 +480,7 @@ class Cpu(Component):
                             self.inst[30],
                         ),
                     )),
-                    (is_auipc | is_lui | is_jal | is_jalr | is_load | is_store,
+                    (is_auipc_or_lui | is_jal | is_load_or_jalr | is_store,
                      saved_carry),
                 ]))
 
@@ -464,13 +488,13 @@ class Cpu(Component):
 
                 # Instructions that write a register do so unconditionally:
                 m.d.comb += rf.write_cmd.valid.eq(
-                    is_auipc | is_lui | is_jal | is_jalr | is_alu_rr | is_alu_ri
+                    is_auipc_or_lui | is_jal | is_jalr | is_alu_rr | is_alu_ri
                 )
                 # Register being written
                 m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
                 # Value written to a register:
                 m.d.comb += rf.write_cmd.payload.value.eq(oneof([
-                    (is_auipc | is_lui, adder_result),
+                    (is_auipc_or_lui, adder_result),
                     (is_jal | is_jalr, mux(
                         self.hi,
                         pc_plus_4[15:],
@@ -536,7 +560,7 @@ class Cpu(Component):
                 # Updates that only occur during hi phase:
                 with m.If(self.hi):
                     m.d.sync += self.pc.eq(oneof([
-                        (is_auipc | is_lui, pc_plus_4),
+                        (is_auipc_or_lui, pc_plus_4),
                         (is_jal | is_jalr, Cat(self.shadow_pc, adder_result)),
                         (is_b, mux(
                             branch_taken,
@@ -565,11 +589,11 @@ class Cpu(Component):
                 m.d.sync += self.ustate.eq(mux(
                     ~self.hi,
                     oneof([
-                        (is_auipc | is_lui | is_jal, UState.OPERATE),
-                        (is_jalr | is_b | is_load | is_store | is_alu_ri | is_alu_rr, UState.REG2),
+                        (is_auipc_or_lui | is_jal, UState.OPERATE),
+                        (is_b | is_load_or_jalr | is_store | is_alu_ri | is_alu_rr, UState.REG2),
                     ]),
                     oneof([
-                        (is_auipc | is_lui | is_jal | is_jalr, UState.FETCH),
+                        (is_auipc_or_lui | is_jal | is_jalr, UState.FETCH),
                         (is_b, mux(
                             branch_taken,
                             UState.BRANCH,
