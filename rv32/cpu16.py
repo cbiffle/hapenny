@@ -176,7 +176,6 @@ class Cpu(Component):
             funct3_is.eq(m.submodules.funct3_is.o),
         ]
 
-
         m.d.sync += [
             is_auipc.eq(opcode == Opcode.AUIPC),
             is_lui.eq(opcode == Opcode.LUI),
@@ -292,11 +291,11 @@ class Cpu(Component):
         branch_condition = Signal(1)
         with m.Switch(self.inst[13:15]):
             with m.Case(0b00):
-                m.d.comb += branch_condition.eq(zero_out)
+                m.d.comb += branch_condition.eq(saved_zero)
             with m.Case(0b10):
-                m.d.comb += branch_condition.eq(signed_less_than)
+                m.d.comb += branch_condition.eq(self.last_signed_less_than)
             with m.Case(0b11):
-                m.d.comb += branch_condition.eq(unsigned_less_than)
+                m.d.comb += branch_condition.eq(self.last_unsigned_less_than)
 
         branch_taken = Signal(1)
         m.d.comb += branch_taken.eq(branch_condition ^ self.inst[12])
@@ -580,17 +579,12 @@ class Cpu(Component):
                     m.d.sync += self.pc.eq(oneof([
                         (is_auipc_or_lui | is_alu, pc_plus_4),
                         (is_jal_or_jalr, Cat(self.shadow_pc, adder_result)),
-                        (is_b, mux(
-                            branch_taken,
-                            self.pc,
-                            pc_plus_4,
-                        )),
                         (is_store, mux(
                             self.bus.cmd.ready & funct3_is[0b010],
                             self.pc,
                             pc_plus_4,
                         )),
-                        (is_load, self.pc),
+                        (is_load | is_b, self.pc),
                     ]))
 
                 # Updates that only occur during low phase:
@@ -612,11 +606,7 @@ class Cpu(Component):
                     ]),
                     oneof([
                         (is_auipc_or_lui_or_jal | is_jalr, UState.FETCH),
-                        (is_b, mux(
-                            branch_taken,
-                            UState.BRANCH,
-                            UState.FETCH,
-                        )),
+                        (is_b, UState.BRANCH),
                         (is_load, mux(
                             self.bus.cmd.ready,
                             UState.LOAD,
@@ -649,7 +639,6 @@ class Cpu(Component):
                     ~self.hi,
                 ))
 
-
             with m.Case(UState.BRANCH):
                 m.d.comb += [
                     adder_rhs.eq(mux(
@@ -660,20 +649,28 @@ class Cpu(Component):
                     adder_carry_in.eq(saved_carry & self.hi),
                 ]
                 m.d.sync += [
-                    self.hi.eq(~self.hi),
                     saved_carry.eq(adder_carry_out),
+                    self.shadow_pc.eq(adder_result[1:]),
                 ]
-                with m.If(self.hi):
+                with m.If(~branch_taken):
                     m.d.sync += [
-                        self.pc.eq(Cat(self.shadow_pc, adder_result)),
-                        self.ustate.eq(UState.FETCH)
+                        self.pc.eq(pc_plus_4),
+                        self.ustate.eq(UState.FETCH),
                     ]
                 with m.Else():
                     m.d.sync += [
-                        self.shadow_pc.eq(adder_result[1:]),
-                        self.accum.eq(self.pc[15:]),
-                        self.ustate.eq(UState.BRANCH)
+                        self.hi.eq(~self.hi),
                     ]
+                    with m.If(self.hi):
+                        m.d.sync += [
+                            self.pc.eq(Cat(self.shadow_pc, adder_result)),
+                            self.ustate.eq(UState.FETCH)
+                        ]
+                    with m.Else():
+                        m.d.sync += [
+                            self.accum.eq(self.pc[15:]),
+                            self.ustate.eq(UState.BRANCH)
+                        ]
 
             with m.Case(UState.LOAD):
                 m.d.comb += [
