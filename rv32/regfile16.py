@@ -1,3 +1,5 @@
+# 16-bit x 64 register file for narrow datapath RV32 implementation.
+
 from amaranth import *
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
