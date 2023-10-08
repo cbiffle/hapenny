@@ -5,12 +5,7 @@ from amaranth.lib.coding import Encoder, Decoder
 
 from rv32 import StreamSig, AlwaysReady
 from rv32.regfile16 import RegFile16
-
-MemCmd = Signature({
-    'addr': Out(32 - 1), # half-addressed
-    'lanes': Out(2),
-    'data': Out(16),
-})
+from rv32.bus import BusPort
 
 DebugPort = Signature({
     'reg_read': Out(StreamSig(6)),
@@ -102,16 +97,17 @@ class Opcode(Enum):
     ALUREG = 0b01100
 
 class Cpu(Component):
-    mem_out: Out(StreamSig(MemCmd))
-    mem_in: In(StreamSig(16))
-
     halt_request: In(1)
     halted: Out(1)
 
     debug: In(DebugPort)
 
-    def __init__(self, *, addr_width = 32, relax_instruction_alignment = False):
+    def __init__(self, *,
+                 addr_width = 32,
+                 relax_instruction_alignment = False):
         super().__init__()
+
+        self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         self.addr_width = addr_width
         self.relax_instruction_alignment = relax_instruction_alignment
@@ -290,8 +286,8 @@ class Cpu(Component):
                 m.d.comb += [
                     load_result[:8].eq(mux(
                         self.mar_lo[0],
-                        self.mem_in.payload[8:],
-                        self.mem_in.payload[:8],
+                        self.bus.resp.payload[8:],
+                        self.bus.resp.payload[:8],
                     )),
                     load_result[8:].eq(load_result[7].replicate(8)),
                 ]
@@ -299,13 +295,13 @@ class Cpu(Component):
                 m.d.comb += [
                     load_result[:8].eq(mux(
                         self.mar_lo[0],
-                        self.mem_in.payload[8:],
-                        self.mem_in.payload[:8],
+                        self.bus.resp.payload[8:],
+                        self.bus.resp.payload[:8],
                     )),
                     load_result[8:].eq(0),
                 ]
             with m.Default(): # LH, LW, LHU
-                m.d.comb += load_result.eq(self.mem_in.payload)
+                m.d.comb += load_result.eq(self.bus.resp.payload)
         store_data = Signal(16)
         with m.Switch(self.inst[12:15]):
             with m.Case(0b000): # SB
@@ -337,20 +333,20 @@ class Cpu(Component):
             # of the instruction, and latch the low half.
             with m.Case(UState.FETCH):
                 m.d.comb += [
-                    self.mem_out.payload.addr.eq(pc31_plus_hi),
+                    self.bus.cmd.payload.addr.eq(pc31_plus_hi),
 
-                    self.mem_in.ready.eq(self.hi),
+                    self.bus.resp.ready.eq(self.hi),
                 ]
                 m.d.sync += saved_zero.eq(1)
                 m.d.sync += saved_carry.eq(0)
-                m.d.sync += self.inst[:16].eq(self.mem_in.payload)
+                m.d.sync += self.inst[:16].eq(self.bus.resp.payload)
                 # This logic is a little subtle, but
                 # - We flip this flag on the low half if the bus is ready
-                #   because mem_out.valid is fixed high.
+                #   because bus.cmd.valid is fixed high.
                 # - We flip this on the high half if the bus is ready and an
                 #   incoming transaction has appeared, because the latter gates our
-                #   assertion of mem_out.valid.
-                with m.If(self.mem_out.valid & self.mem_out.ready):
+                #   assertion of bus.cmd.valid.
+                with m.If(self.bus.cmd.valid & self.bus.cmd.ready):
                     m.d.sync += self.hi.eq(~self.hi)
 
                 with m.If(~self.hi):
@@ -362,16 +358,16 @@ class Cpu(Component):
                         # Otherwise, we can generate a memory transaction
                         # unconditionally, because we know we have somewhere to
                         # put it.
-                        m.d.comb += self.mem_out.valid.eq(1)
+                        m.d.comb += self.bus.cmd.valid.eq(1)
                 with m.Else():
                     # Forward the fetch completion to the valid signal.
-                    m.d.comb += self.mem_out.valid.eq(self.mem_in.valid)
+                    m.d.comb += self.bus.cmd.valid.eq(self.bus.resp.valid)
 
                     # If the low half of the fetch has completed...
-                    with m.If(self.mem_in.valid):
+                    with m.If(self.bus.resp.valid):
                         # And the bus is ready to accept our request for the
                         # high half...
-                        with m.If(self.mem_out.ready):
+                        with m.If(self.bus.cmd.ready):
                             # ...then we can move on
                             m.d.sync += self.ustate.eq(UState.INST_REG1_LO)
                         with m.Else():
@@ -388,11 +384,11 @@ class Cpu(Component):
             with m.Case(UState.FETCH_HI_WAIT):
                 # Keep trying to issue the high half
                 m.d.comb += [
-                    self.mem_out.payload.addr.eq(pc31_plus_hi),
-                    self.mem_out.valid.eq(1),
+                    self.bus.cmd.payload.addr.eq(pc31_plus_hi),
+                    self.bus.cmd.valid.eq(1),
                 ]
 
-                with m.If(self.mem_out.ready):
+                with m.If(self.bus.cmd.ready):
                     # fetch-hi has issued, we can move on to...
                     m.d.sync += self.ustate.eq(UState.INST_REG1_LO)
                     m.d.sync += self.hi.eq(~self.hi)
@@ -402,16 +398,17 @@ class Cpu(Component):
             #
             # Only entered with hi==0
             with m.Case(UState.INST_REG1_LO):
-                with m.If(self.mem_in.valid):
+                m.d.comb += self.bus.resp.ready.eq(1)
+                with m.If(self.bus.resp.valid):
                     # Hi half fetch is completing!
-                    m.d.sync += self.inst[16:].eq(self.mem_in.payload)
+                    m.d.sync += self.inst[16:].eq(self.bus.resp.payload)
                     # Set up a read of the low half of the first operand
                     # register, optimistically, using the not-yet-latched rs1
                     # select bits coming in from the bus.
                     m.d.comb += [
                         rf.read_cmd.valid.eq(1),
                         rf.read_cmd.payload.eq(
-                            Cat(self.inst[15], self.mem_in.payload[0:4]),
+                            Cat(self.inst[15], self.bus.resp.payload[0:4]),
                         ),
                     ]
 
@@ -528,14 +525,14 @@ class Cpu(Component):
 
                 # Memory transaction generation
 
-                m.d.comb += self.mem_out.payload.addr.eq(
+                m.d.comb += self.bus.cmd.payload.addr.eq(
                     Cat(self.mar_lo, adder_result)[1:]
                 )
-                m.d.comb += self.mem_out.payload.data.eq(store_data)
-                m.d.comb += self.mem_out.payload.lanes.eq(oneof([
+                m.d.comb += self.bus.cmd.payload.data.eq(store_data)
+                m.d.comb += self.bus.cmd.payload.lanes.eq(oneof([
                     (is_store & self.hi, store_mask),
                 ]))
-                m.d.comb += self.mem_out.valid.eq(oneof([
+                m.d.comb += self.bus.cmd.valid.eq(oneof([
                     (is_load | is_store, self.hi),
                 ]))
 
@@ -568,7 +565,7 @@ class Cpu(Component):
                             pc_plus_4,
                         )),
                         (is_store, mux(
-                            self.mem_out.ready & funct3_is[0b010],
+                            self.bus.cmd.ready & funct3_is[0b010],
                             self.pc,
                             pc_plus_4,
                         )),
@@ -600,12 +597,12 @@ class Cpu(Component):
                             UState.FETCH,
                         )),
                         (is_load, mux(
-                            self.mem_out.ready,
+                            self.bus.cmd.ready,
                             UState.LOAD,
                             self.ustate,
                         )),
                         (is_store, mux(
-                            self.mem_out.ready,
+                            self.bus.cmd.ready,
                             mux(
                                 funct3_is[0b010],
                                 UState.STORE,
@@ -659,19 +656,19 @@ class Cpu(Component):
 
             with m.Case(UState.LOAD):
                 m.d.comb += [
-                    self.mem_in.ready.eq(1),
+                    self.bus.resp.ready.eq(1),
 
                     # Set up the write of the halfword...
                     rf.write_cmd.payload.reg.eq(Cat(self.inst[7:12], self.hi)),
                     rf.write_cmd.payload.value.eq(load_result),
                     # ...but only commit it if the data's actually here.
-                    rf.write_cmd.valid.eq(self.mem_in.valid),
-                    self.mem_out.payload.addr.eq(
+                    rf.write_cmd.valid.eq(self.bus.resp.valid),
+                    self.bus.cmd.payload.addr.eq(
                         Cat(self.mar_lo, adder_result)[1:] | 1,
                     ),
                 ]
 
-                with m.If(self.mem_in.valid):
+                with m.If(self.bus.resp.valid):
                     m.d.sync += [
                         self.hi.eq(~self.hi),
 
@@ -688,8 +685,8 @@ class Cpu(Component):
                                 m.d.sync += self.ustate.eq(UState.FILL_MSBS)
                             with m.Case(0b010): # LW
                                 # Address the next halfword
-                                m.d.comb += self.mem_out.valid.eq(1)
-                                with m.If(self.mem_out.ready):
+                                m.d.comb += self.bus.cmd.valid.eq(1)
+                                with m.If(self.bus.cmd.ready):
                                     m.d.sync += self.ustate.eq(UState.LOAD)
                                 with m.Else():
                                     m.d.sync += self.ustate.eq(UState.LOAD_WAIT)
@@ -704,12 +701,12 @@ class Cpu(Component):
             with m.Case(UState.LOAD_WAIT):
                 # Address the next halfword
                 m.d.comb += [
-                    self.mem_out.valid.eq(1),
-                    self.mem_out.payload.addr.eq(
+                    self.bus.cmd.valid.eq(1),
+                    self.bus.cmd.payload.addr.eq(
                         Cat(self.mar_lo, adder_result)[1:] | 1,
                     ),
                 ]
-                with m.If(self.mem_out.ready):
+                with m.If(self.bus.cmd.ready):
                     m.d.sync += self.ustate.eq(UState.LOAD_WAIT)
                 with m.Else():
                     m.d.sync += self.ustate.eq(UState.LOAD)
@@ -718,14 +715,14 @@ class Cpu(Component):
                 # Write the high half of rs2 (which has just arrived on the
                 # register file output port) to memory.
                 m.d.comb += [
-                    self.mem_out.valid.eq(1),
-                    self.mem_out.payload.addr.eq(
+                    self.bus.cmd.valid.eq(1),
+                    self.bus.cmd.payload.addr.eq(
                         Cat(self.mar_lo, adder_result)[1:] | 1,
                     ),
-                    self.mem_out.payload.data.eq(store_data),
-                    self.mem_out.payload.lanes.eq(store_mask),
+                    self.bus.cmd.payload.data.eq(store_data),
+                    self.bus.cmd.payload.lanes.eq(store_mask),
                 ]
-                with m.If(self.mem_out.ready):
+                with m.If(self.bus.cmd.ready):
                     m.d.sync += [
                         self.pc.eq(pc_plus_4),
                         self.ustate.eq(UState.FETCH),

@@ -8,14 +8,14 @@ from amaranth_boards.test.blinky import Blinky
 from amaranth_boards.icestick import ICEStickPlatform
 
 from rv32 import StreamSig
-from rv32.cpu16 import Cpu, MemCmd
+from rv32.cpu16 import Cpu
+from rv32.bus import BusPort
 
 RAM_WORDS = 256 * 1
 BUS_ADDR_BITS = (RAM_WORDS - 1).bit_length()
 
 class TestMemory(Component):
-    command: In(StreamSig(MemCmd))
-    response: Out(StreamSig(16))
+    bus: In(BusPort(addr = BUS_ADDR_BITS, data = 16))
 
     def __init__(self, contents):
         super().__init__()
@@ -36,16 +36,16 @@ class TestMemory(Component):
         wp = self.m.write_port(granularity = 8)
 
         m.d.comb += [
-            rp.addr.eq(self.command.payload.addr[1:]),
-            rp.en.eq(self.command.valid & (self.command.payload.lanes == 0)),
+            rp.addr.eq(self.bus.cmd.payload.addr[1:]),
+            rp.en.eq(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0)),
 
-            wp.addr.eq(self.command.payload.addr[1:]),
-            wp.data.eq(self.command.payload.data),
-            wp.en[0].eq(self.command.valid & self.command.payload.lanes[0]),
-            wp.en[1].eq(self.command.valid & self.command.payload.lanes[1]),
+            wp.addr.eq(self.bus.cmd.payload.addr[1:]),
+            wp.data.eq(self.bus.cmd.payload.data),
+            wp.en[0].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]),
+            wp.en[1].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]),
 
             # Nothing causes this memory to stop being available.
-            self.command.ready.eq(1),
+            self.bus.cmd.ready.eq(1),
         ]
 
         # Delay the read enable signal by one cycle to use as output valid.
@@ -54,8 +54,8 @@ class TestMemory(Component):
         m.d.sync += delayed_read.eq(rp.en)
 
         m.d.comb += [
-            self.response.valid.eq(delayed_read),
-            self.response.payload.eq(rp.data),
+            self.bus.resp.valid.eq(delayed_read),
+            self.bus.resp.payload.eq(rp.data),
         ]
 
         return m
@@ -80,8 +80,7 @@ class Test(Elaboratable):
             #0b00000000000000000000_00000_1101111, # JAL x0, .
         ])
 
-        connect(m, cpu.mem_out, mem.command)
-        connect(m, cpu.mem_in, mem.response)
+        connect(m, cpu.bus, mem.bus)
 
         def get_all_resources(name):
             resources = []
@@ -94,7 +93,7 @@ class Test(Elaboratable):
 
         leds     = [res.o for res in get_all_resources("led")]
 
-        m.d.comb += leds[0].eq(cpu.mem_out.valid)
+        m.d.comb += leds[0].eq(cpu.bus.cmd.valid)
 
         return m
 

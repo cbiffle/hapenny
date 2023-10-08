@@ -4,7 +4,8 @@ from amaranth.back import verilog
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 
-from rv32.cpu16 import Cpu, MemCmd
+from rv32.cpu16 import Cpu
+from rv32.bus import BusPort, partial_decode, SimpleFabric
 from rv32 import *
 
 class TestPhase(Enum):
@@ -14,11 +15,9 @@ class TestPhase(Enum):
     CHECK = 3
 
 class TestMemory(Component):
-    command: In(StreamSig(MemCmd))
-    response: Out(StreamSig(16))
+    bus: In(BusPort(addr = 8, data = 16))
 
-    inspect_command: In(StreamSig(MemCmd))
-    inspect_response: Out(StreamSig(16))
+    inspect: In(BusPort(addr = 8, data = 16))
 
     def __init__(self, contents):
         super().__init__()
@@ -39,16 +38,16 @@ class TestMemory(Component):
         wp = self.m.write_port(granularity = 8)
 
         m.d.comb += [
-            rp.addr.eq(self.command.payload.addr),
-            rp.en.eq(self.command.valid & (self.command.payload.lanes == 0b00)),
+            rp.addr.eq(self.bus.cmd.payload.addr),
+            rp.en.eq(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0b00)),
 
-            wp.addr.eq(self.command.payload.addr),
-            wp.data.eq(self.command.payload.data),
-            wp.en[0].eq(self.command.valid & self.command.payload.lanes[0]),
-            wp.en[1].eq(self.command.valid & self.command.payload.lanes[1]),
+            wp.addr.eq(self.bus.cmd.payload.addr),
+            wp.data.eq(self.bus.cmd.payload.data),
+            wp.en[0].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]),
+            wp.en[1].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]),
 
             # Nothing causes this memory to stop being available.
-            self.command.ready.eq(1),
+            self.bus.cmd.ready.eq(1),
         ]
 
         # Delay the read enable signal by one cycle to use as output valid.
@@ -57,8 +56,8 @@ class TestMemory(Component):
         m.d.sync += delayed_read.eq(rp.en)
 
         m.d.comb += [
-            self.response.valid.eq(delayed_read),
-            self.response.payload.eq(rp.data),
+            self.bus.resp.valid.eq(delayed_read),
+            self.bus.resp.payload.eq(rp.data),
         ]
 
         # Do it all again for the inspect port
@@ -67,19 +66,19 @@ class TestMemory(Component):
         inspect_wp = self.m.write_port(granularity = 8)
 
         m.d.comb += [
-            inspect_rp.addr.eq(self.inspect_command.payload.addr[1:]),
-            inspect_rp.en.eq(self.inspect_command.valid &
-                             (self.inspect_command.payload.lanes == 0)),
+            inspect_rp.addr.eq(self.inspect.cmd.payload.addr[1:]),
+            inspect_rp.en.eq(self.inspect.cmd.valid &
+                             (self.inspect.cmd.payload.lanes == 0)),
 
-            inspect_wp.addr.eq(self.inspect_command.payload.addr[1:]),
-            inspect_wp.data.eq(self.inspect_command.payload.data),
-            inspect_wp.en[0].eq(self.inspect_command.valid &
-                                self.inspect_command.payload.lanes[0]),
-            inspect_wp.en[1].eq(self.inspect_command.valid &
-                                self.inspect_command.payload.lanes[1]),
+            inspect_wp.addr.eq(self.inspect.cmd.payload.addr[1:]),
+            inspect_wp.data.eq(self.inspect.cmd.payload.data),
+            inspect_wp.en[0].eq(self.inspect.cmd.valid &
+                                self.inspect.cmd.payload.lanes[0]),
+            inspect_wp.en[1].eq(self.inspect.cmd.valid &
+                                self.inspect.cmd.payload.lanes[1]),
 
             # Nothing causes this memory to stop being available.
-            self.inspect_command.ready.eq(1),
+            self.inspect.cmd.ready.eq(1),
         ]
 
         # Delay the read enable signal by one cycle to use as output valid.
@@ -88,8 +87,8 @@ class TestMemory(Component):
         m.d.sync += inspect_delayed_read.eq(inspect_rp.en)
 
         m.d.comb += [
-            self.inspect_response.valid.eq(inspect_delayed_read),
-            self.inspect_response.payload.eq(inspect_rp.data),
+            self.inspect.resp.valid.eq(inspect_delayed_read),
+            self.inspect.resp.payload.eq(inspect_rp.data),
         ]
 
         return m
@@ -155,32 +154,32 @@ def read_pc():
     return (yield uut.debug.pc)
 
 def write_mem(addr, value):
-    yield mem.inspect_command.payload.addr.eq(addr)
-    yield mem.inspect_command.payload.data.eq(value & 0xFFFF)
-    yield mem.inspect_command.payload.lanes.eq(0b11)
-    yield mem.inspect_command.valid.eq(1)
+    yield mem.inspect.cmd.payload.addr.eq(addr)
+    yield mem.inspect.cmd.payload.data.eq(value & 0xFFFF)
+    yield mem.inspect.cmd.payload.lanes.eq(0b11)
+    yield mem.inspect.cmd.valid.eq(1)
     yield
-    yield mem.inspect_command.payload.addr.eq(addr + 2)
-    yield mem.inspect_command.payload.data.eq(value >> 16)
-    yield mem.inspect_command.payload.lanes.eq(0b11)
-    yield mem.inspect_command.valid.eq(1)
+    yield mem.inspect.cmd.payload.addr.eq(addr + 2)
+    yield mem.inspect.cmd.payload.data.eq(value >> 16)
+    yield mem.inspect.cmd.payload.lanes.eq(0b11)
+    yield mem.inspect.cmd.valid.eq(1)
     yield
-    yield mem.inspect_command.payload.lanes.eq(0)
-    yield mem.inspect_command.valid.eq(0)
+    yield mem.inspect.cmd.payload.lanes.eq(0)
+    yield mem.inspect.cmd.valid.eq(0)
 
 def read_mem(addr):
-    yield mem.inspect_command.payload.addr.eq(addr)
-    yield mem.inspect_command.payload.lanes.eq(0)
-    yield mem.inspect_command.valid.eq(1)
+    yield mem.inspect.cmd.payload.addr.eq(addr)
+    yield mem.inspect.cmd.payload.lanes.eq(0)
+    yield mem.inspect.cmd.valid.eq(1)
     yield
-    yield mem.inspect_command.payload.addr.eq(addr + 2)
-    yield mem.inspect_command.valid.eq(1)
+    yield mem.inspect.cmd.payload.addr.eq(addr + 2)
+    yield mem.inspect.cmd.valid.eq(1)
     yield Settle()
-    bottom = yield mem.inspect_response.payload
+    bottom = yield mem.inspect.resp.payload
     yield
-    yield mem.inspect_command.valid.eq(0)
+    yield mem.inspect.cmd.valid.eq(0)
     yield Settle()
-    top = yield mem.inspect_response.payload
+    top = yield mem.inspect.resp.payload
 
     return bottom | (top << 16)
 
@@ -252,22 +251,28 @@ if __name__ == "__main__":
     m.submodules.mem = mem = TestMemory([
         0b00000000000000000000_00000_1101111, # JAL x0, .
     ])
+    m.submodules.mem2 = mem2 = TestMemory([
+        0b00000000000000000000_00000_1101111, # JAL x0, .
+    ])
 
     phase = Signal(TestPhase)
 
-    connect(m, uut.mem_out, mem.command)
-    connect(m, uut.mem_in, mem.response)
+    m.submodules.bus = fabric = SimpleFabric([
+        partial_decode(m, mem.bus, 31),
+    ])
+
+    connect(m, uut.bus, fabric.bus)
 
     ports = [
         phase,
         uut.ustate,
         uut.hi,
-        uut.mem_out.valid,
-        uut.mem_out.payload.addr,
-        uut.mem_out.payload.data,
-        uut.mem_out.payload.lanes,
-        uut.mem_in.valid,
-        uut.mem_in.payload,
+        uut.bus.cmd.valid,
+        uut.bus.cmd.payload.addr,
+        uut.bus.cmd.payload.data,
+        uut.bus.cmd.payload.lanes,
+        uut.bus.resp.valid,
+        uut.bus.resp.payload,
     ]
 
     verilog_src = verilog.convert(m, ports=ports)
