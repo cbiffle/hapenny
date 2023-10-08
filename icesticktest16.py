@@ -70,21 +70,49 @@ class Test(Elaboratable):
         )
         random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
-            #random.getrandbits(16) for _ in range(RAM_WORDS)
-            0b0_000_00001_0010011,
-            0b0010_0000_0000_0000,
-
-            0b0_000_00010_0010011,
-            0b0000_0000_0001_0000,
-
-            0b1_001_00000_0100011,
-            0b0000000_00010_0000,
-
-            0b1_001_00000_0100011,
-            0b0000000_00000_0000,
-
-            0b1111_00000_1101111,
-            0b1111_1111_1001_1111,
+            # 00000000 <reset>:
+            #    0:   20000093                li      ra,512
+            0x0093,
+            0x2000,
+            #    4:   00100113                li      sp,1
+            0x0113,
+            0x0010,
+            #    8:   000f51b7                li      gp,0xf5
+            0x000f,
+            0x51b7,
+            # 
+            # 0000000c <loop>:
+            #    c:   00209023                sh      sp,0(ra)
+            0x9023,
+            0x0020,
+            #   10:   00018213                mv      tp,gp
+            0x8213,
+            0x0001,
+            # 
+            # 00000014 <loop2>:
+            #   14:   fff20213                addi    tp,tp,-1
+            0x0213,
+            0xfff2,
+            #   18:   fe020ee3                beqz    tp,14 <loop2>
+            0x0ee3,
+            0xfe02,
+            #   1c:   00009023                sh      zero,0(ra)
+            0x9023,
+            0x0000,
+            #   20:   00018213                mv      tp,gp
+            0x8213,
+            0x0001,
+            # 
+            # 00000024 <loop3>:
+            #   24:   fff20213                addi    tp,tp,-1
+            0x0213,
+            0xfff2,
+            #   28:   fe0206e3                beqz    tp,14 <loop2>
+            0x06e3,
+            0xfe02,
+            #   2c:   fe1ff06f                j       c <loop>
+            0xf06f,
+            0xfe1f,
         ])
         m.submodules.port = port = OutputPort(1)
         m.submodules.fabric = fabric = SimpleFabric([
@@ -105,7 +133,7 @@ class Test(Elaboratable):
 
         leds     = [res.o for res in get_all_resources("led")]
 
-        m.d.comb += leds[0].eq(cpu.bus.cmd.valid)
+        m.d.comb += leds[0].eq(port.pins)
 
         return m
 
