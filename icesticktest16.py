@@ -9,7 +9,8 @@ from amaranth_boards.icestick import ICEStickPlatform
 
 from rv32 import StreamSig
 from rv32.cpu16 import Cpu
-from rv32.bus import BusPort
+from rv32.bus import BusPort, SimpleFabric, partial_decode
+from rv32.gpio import OutputPort
 
 RAM_WORDS = 256 * 1
 BUS_ADDR_BITS = (RAM_WORDS - 1).bit_length()
@@ -65,22 +66,33 @@ class Test(Elaboratable):
     def elaborate(self, platform):
         m = Module()
         m.submodules.cpu = cpu = Cpu(
-            addr_width = BUS_ADDR_BITS + 1,
+            addr_width = BUS_ADDR_BITS + 1 + 1,
         )
         random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
-            random.getrandbits(16) for _ in range(RAM_WORDS)
-            #0b00000000000000000000000000010011,
-            #0b00000000000000000000000001100111,
-            #0b10000000000000000000000000100011,
-            #0b000010101100_00000_010_00001_0000011, # LW x1, (x0 + 0xAC)
-            #0b10101010101010101010_00001_0010111, # AUIPC x1, ...
-            #0b10101010101010101010_00001_0110111, # LUI x1, 0xAAAAA
-            #0b0_100000_00010_00001_000_0000_0_1100011, # BEQ something
-            #0b00000000000000000000_00000_1101111, # JAL x0, .
+            #random.getrandbits(16) for _ in range(RAM_WORDS)
+            0b0_000_00001_0010011,
+            0b0010_0000_0000_0000,
+
+            0b0_000_00010_0010011,
+            0b0000_0000_0001_0000,
+
+            0b1_001_00000_0100011,
+            0b0000000_00010_0000,
+
+            0b1_001_00000_0100011,
+            0b0000000_00000_0000,
+
+            0b1111_00000_1101111,
+            0b1111_1111_1001_1111,
+        ])
+        m.submodules.port = port = OutputPort(1)
+        m.submodules.fabric = fabric = SimpleFabric([
+            mem.bus,
+            partial_decode(m, port.bus, BUS_ADDR_BITS),
         ])
 
-        connect(m, cpu.bus, mem.bus)
+        connect(m, cpu.bus, fabric.bus)
 
         def get_all_resources(name):
             resources = []

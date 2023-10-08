@@ -98,7 +98,11 @@ class SimpleFabric(Elaboratable):
             ]
             # Only propagate cmd valid to the specific addressed device, and
             # don't propagate it if we're stalling.
-            m.d.comb += d.cmd.valid.eq(self.bus.cmd.valid & ok & (devid == i))
+            dv = Signal(1, name = f"valid_{i}")
+            m.d.comb += [
+                dv.eq(self.bus.cmd.valid & ok & (devid == i)),
+                d.cmd.valid.eq(dv),
+            ]
             # Only propagate response ready signal to the device we're expecting
             # to hear from.
             m.d.comb += d.resp.ready.eq(self.bus.resp.ready & expecting &
