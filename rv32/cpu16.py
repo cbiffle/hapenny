@@ -135,21 +135,35 @@ class Cpu(Component):
 
         opcode = Signal(5)
         inst_rd = Signal(5)
+
+        # Instruction decode strobes. These are all registered and are available
+        # one cycle after the inst contents are latched.
         is_auipc = Signal(1)
         is_lui = Signal(1)
-        is_auipc_or_lui = Signal(1)
         is_jal = Signal(1)
         is_jalr = Signal(1)
         is_b = Signal(1)
         is_load = Signal(1)
-        is_load_or_jalr = Signal(1)
         is_store = Signal(1)
         is_alu_rr = Signal(1)
         is_alu_ri = Signal(1)
+
+        # Instruction group decode strobes. Also registered. These are basically
+        # manual retiming of the instruction comparison logic, because my tools
+        # are limited.
+        is_auipc_or_lui = Signal(1)
+        is_auipc_or_lui_or_jal = Signal(1)
+        is_auipc_or_jal = Signal(1)
+        is_jal_or_jalr = Signal(1)
+        is_load_or_jalr = Signal(1)
+        is_alu = Signal(1)
+
+        # Immediate/operand decode strobes.
         is_imm_i = Signal(1)
         is_neg_imm_i = Signal(1)
         is_neg_reg_to_adder = Signal(1)
         is_reg_to_adder = Signal(1)
+
         m.d.comb += [
             opcode.eq(self.inst[2:7]),
             inst_rd.eq(self.inst[7:12]),
@@ -167,14 +181,21 @@ class Cpu(Component):
             is_auipc.eq(opcode == Opcode.AUIPC),
             is_lui.eq(opcode == Opcode.LUI),
             is_auipc_or_lui.eq((opcode == Opcode.LUI) | (opcode == Opcode.AUIPC)),
+            is_auipc_or_lui_or_jal.eq((opcode == Opcode.LUI)
+                                      | (opcode == Opcode.AUIPC)
+                                      | (opcode == Opcode.JAL)),
             is_jal.eq(opcode == Opcode.JAL),
+            is_auipc_or_jal.eq((opcode == Opcode.AUIPC) | (opcode ==
+                                                           Opcode.JAL)),
             is_store.eq(opcode == Opcode.Sxx),
             is_jalr.eq(opcode == Opcode.JALR),
+            is_jal_or_jalr.eq((opcode == Opcode.JAL) | (opcode == Opcode.JALR)),
             is_b.eq(opcode == Opcode.Bxx),
             is_load.eq(opcode == Opcode.Lxx),
             is_load_or_jalr.eq((opcode == Opcode.Lxx) | (opcode == Opcode.JALR)),
             is_alu_rr.eq(opcode == Opcode.ALUREG),
             is_alu_ri.eq(opcode == Opcode.ALUIMM),
+            is_alu.eq((opcode == Opcode.ALUREG) | (opcode == Opcode.ALUIMM)),
 
             is_imm_i.eq(
                 (opcode == Opcode.Lxx) | (opcode == Opcode.JALR)
@@ -425,7 +446,7 @@ class Cpu(Component):
             with m.Case(UState.REG2):
                 # rs1 (hi/lo) is now available on the register file output
                 # port. Latch it into the accumulator.
-                with m.If(is_auipc | is_jal):
+                with m.If(is_auipc_or_jal):
                     # Load program counter instead.
                     m.d.sync += self.accum.eq(mux(
                         self.hi,
@@ -477,7 +498,7 @@ class Cpu(Component):
                             self.inst[30],
                         ),
                     )),
-                    (is_auipc_or_lui | is_jal | is_load_or_jalr | is_store,
+                    (is_auipc_or_lui_or_jal | is_load_or_jalr | is_store,
                      saved_carry),
                 ]))
 
@@ -485,19 +506,19 @@ class Cpu(Component):
 
                 # Instructions that write a register do so unconditionally:
                 m.d.comb += rf.write_cmd.valid.eq(
-                    is_auipc_or_lui | is_jal | is_jalr | is_alu_rr | is_alu_ri
+                    is_auipc_or_lui_or_jal | is_jalr | is_alu
                 )
                 # Register being written
                 m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
                 # Value written to a register:
                 m.d.comb += rf.write_cmd.payload.value.eq(oneof([
                     (is_auipc_or_lui, adder_result),
-                    (is_jal | is_jalr, mux(
+                    (is_jal_or_jalr, mux(
                         self.hi,
                         pc_plus_4[15:],
                         Cat(0, pc_plus_4[:15]),
                     )),
-                    (is_alu_rr | is_alu_ri, onehot_choice(funct3_is, {
+                    (is_alu, onehot_choice(funct3_is, {
                         0b000: adder_result,
                         0b010: 0, # important for SLT step
                         0b011: 0, # important for SLT step
@@ -510,14 +531,14 @@ class Cpu(Component):
                 # Register read for next cycle
 
                 m.d.comb += rf.read_cmd.valid.eq(oneof([
-                    (is_jalr | is_b | is_alu_rr | is_alu_ri | is_store, 1),
+                    (is_jalr | is_b | is_alu | is_store, 1),
                     (is_load, ~self.hi),
                 ]))
                 m.d.comb += rf.read_cmd.payload.eq(mux(
                     is_store & self.hi,
                     Cat(self.inst[20:25], 1),
                     mux(
-                        is_alu_rr | is_alu_ri,
+                        is_alu,
                         Cat(self.inst[15:20], ~self.hi),
                         Cat(self.inst[15:20], 1),
                     ),
@@ -539,10 +560,10 @@ class Cpu(Component):
                 # Assorted register update rules
 
                 m.d.sync += self.accum.eq(oneof([
-                    (is_auipc | is_jal, self.pc[15:]),
+                    (is_auipc_or_jal, self.pc[15:]),
                     (is_lui, 0),
                     (is_b, Cat(0, self.pc[:15])),
-                    (is_alu_ri | is_alu_rr, self.accum),
+                    (is_alu, self.accum),
                 ]))
 
                 m.d.sync += [
@@ -557,8 +578,8 @@ class Cpu(Component):
                 # Updates that only occur during hi phase:
                 with m.If(self.hi):
                     m.d.sync += self.pc.eq(oneof([
-                        (is_auipc_or_lui | is_alu_rr | is_alu_ri, pc_plus_4),
-                        (is_jal | is_jalr, Cat(self.shadow_pc, adder_result)),
+                        (is_auipc_or_lui | is_alu, pc_plus_4),
+                        (is_jal_or_jalr, Cat(self.shadow_pc, adder_result)),
                         (is_b, mux(
                             branch_taken,
                             self.pc,
@@ -586,11 +607,11 @@ class Cpu(Component):
                 m.d.sync += self.ustate.eq(mux(
                     ~self.hi,
                     oneof([
-                        (is_auipc_or_lui | is_jal, UState.OPERATE),
-                        (is_b | is_load_or_jalr | is_store | is_alu_ri | is_alu_rr, UState.REG2),
+                        (is_auipc_or_lui_or_jal, UState.OPERATE),
+                        (is_b | is_load_or_jalr | is_store | is_alu, UState.REG2),
                     ]),
                     oneof([
-                        (is_auipc_or_lui | is_jal | is_jalr, UState.FETCH),
+                        (is_auipc_or_lui_or_jal | is_jalr, UState.FETCH),
                         (is_b, mux(
                             branch_taken,
                             UState.BRANCH,
@@ -610,7 +631,7 @@ class Cpu(Component):
                             ),
                             self.ustate,
                         )),
-                        (is_alu_ri | is_alu_rr, onehot_choice(funct3_is, {
+                        (is_alu, onehot_choice(funct3_is, {
                             0b000: UState.FETCH,
                             0b001: UState.SHIFT,
                             0b010: UState.SLT,
@@ -623,7 +644,7 @@ class Cpu(Component):
                     ]),
                 ))
                 m.d.sync += self.hi.eq(mux(
-                    (is_alu_rr | is_alu_ri) & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
+                    is_alu & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
                     self.hi,
                     ~self.hi,
                 ))
