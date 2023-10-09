@@ -3,7 +3,7 @@ import random
 
 from amaranth import *
 from amaranth.lib.wiring import *
-from amaranth.build import ResourceError
+from amaranth.build import ResourceError, Resource, Pins, Attrs
 from amaranth_boards.test.blinky import Blinky
 from amaranth_boards.icestick import ICEStickPlatform
 
@@ -67,6 +67,7 @@ class Test(Elaboratable):
         m = Module()
         m.submodules.cpu = cpu = Cpu(
             addr_width = BUS_ADDR_BITS + 1 + 1,
+            has_interrupt = True,
         )
         random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
@@ -132,9 +133,15 @@ class Test(Elaboratable):
             return resources
 
         leds     = [res.o for res in get_all_resources("led")]
+        irq = platform.request("irq", 0)
 
-        m.d.comb += leds[0].eq(port.pins)
+        m.d.comb += [
+            cpu.irq.eq(irq.i),
+            leds[0].eq(port.pins),
+        ]
 
         return m
 
-ICEStickPlatform().build(Test())
+p = ICEStickPlatform()
+p.resources["irq", 0] = Resource("irq", 0, Pins("78", dir="i"), Attrs(IO_STANDARD="SB_LVCMOS"))
+p.build(Test())

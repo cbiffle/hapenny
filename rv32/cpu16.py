@@ -5,9 +5,10 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
-from rv32 import StreamSig, AlwaysReady
+from rv32 import StreamSig, AlwaysReady, csr16
 from rv32.regfile16 import RegFile16
 from rv32.bus import BusPort
+from rv32.csr16 import CsrFile16, CsrReg
 
 DebugPort = Signature({
     'reg_read': Out(StreamSig(6)),
@@ -108,7 +109,8 @@ class UState(Enum):
     SHIFT = 11
     FINISH_SHIFT = 12
     SLT = 13
-    HALTED = 14
+    CSR = 14
+    HALTED = 15
 
 class Opcode(Enum):
     LUI = 0b01101
@@ -120,6 +122,7 @@ class Opcode(Enum):
     Sxx = 0b01000
     ALUIMM = 0b00100
     ALUREG = 0b01100
+    SYSTEM = 0b11100
 
 class Cpu(Component):
     halt_request: In(1)
@@ -129,10 +132,15 @@ class Cpu(Component):
 
     def __init__(self, *,
                  addr_width = 32,
+                 has_interrupt = False,
                  relax_instruction_alignment = False):
         super().__init__()
 
         self.bus = BusPort(addr = addr_width - 1, data = 16).create()
+
+        self.has_interrupt = has_interrupt
+        if has_interrupt:
+            self.irq = Signal(1)
 
         self.addr_width = addr_width
         self.relax_instruction_alignment = relax_instruction_alignment
@@ -155,6 +163,36 @@ class Cpu(Component):
 
         m.submodules.regfile = rf = RegFile16()
 
+        if self.has_interrupt:
+            m.submodules.mstatus = mstatus = CsrReg(
+                name = "mstatus",
+                width = 8,
+                mask = 0b1000_1000,
+            )
+            m.submodules.mepc = mepc = CsrReg(
+                name = "mepc",
+                width = self.addr_width,
+                mask = ((1 << self.addr_width) - 1) & ~1,
+            )
+            m.submodules.mtvec = mtvec = CsrReg(
+                name = "mtvec",
+                width = self.addr_width,
+                reset = 4,
+                mask = 0,
+            )
+            m.submodules.mscratch = mscratch = CsrReg(
+                name = "mscratch",
+                width = 32,
+            )
+            m.submodules.csr_file = csr_file = CsrFile16({
+                0x300: mstatus.cmd,
+                0x305: mtvec.cmd,
+                0x340: mscratch.cmd,
+                0x341: mepc.cmd,
+            })
+
+            irq_enable = mstatus.read[3]
+
         pc_plus_4 = Signal(self.addr_width - 1)
         m.d.comb += pc_plus_4.eq(self.pc + 2)
 
@@ -172,6 +210,9 @@ class Cpu(Component):
         is_store = Signal(1)
         is_alu_rr = Signal(1)
         is_alu_ri = Signal(1)
+        is_system = Signal(1)
+        is_csr = Signal(1)
+        is_mret = Signal(1)
 
         # Instruction group decode strobes. Also registered. These are basically
         # manual retiming of the instruction comparison logic, because my tools
@@ -220,6 +261,7 @@ class Cpu(Component):
             is_alu_rr.eq(opcode == Opcode.ALUREG),
             is_alu_ri.eq(opcode == Opcode.ALUIMM),
             is_alu.eq((opcode == Opcode.ALUREG) | (opcode == Opcode.ALUIMM)),
+            is_system.eq(opcode == Opcode.SYSTEM),
 
             is_imm_i.eq(
                 (opcode == Opcode.Lxx) | (opcode == Opcode.JALR)
@@ -236,6 +278,14 @@ class Cpu(Component):
                 ((opcode == Opcode.ALUREG) & ~(funct3_is[0b010] | funct3_is[0b011]))
             ),
         ]
+        # Only implement decode logic for these instructions if necessary, to
+        # save area in the baseline implementation.
+        if self.has_interrupt:
+            m.d.sync += [
+                is_csr.eq((opcode == Opcode.SYSTEM) & ~funct3_is[0b000]),
+                is_mret.eq((opcode == Opcode.SYSTEM) & funct3_is[0b000]
+                           & (self.inst[25:] == 0b0011000)),
+            ]
 
         # Immediate encodings
         imm_i = Signal(32)
@@ -370,6 +420,31 @@ class Cpu(Component):
         else:
             m.d.comb += pc31_plus_hi.eq(self.pc | self.hi)
 
+        if self.has_interrupt:
+            # CSR port driving
+            m.d.comb += [
+                # We DO NOT set valid here. That happens in OPERATE et al.
+                csr_file.cmd.payload.write.eq(oneof([
+                    # Immediate versions have inst14 set. We only pass the
+                    # immediate through on the low phase.
+                    (self.inst[14] & ~self.hi, self.inst[15:20]),
+                    # Register versions write the accumulator on both phases.
+                    (~self.inst[14], self.accum),
+                ])),
+                csr_file.cmd.payload.high.eq(self.hi),
+                csr_file.cmd.payload.addr.eq(imm_i),
+                csr_file.cmd.payload.mode.eq(
+                    mux(
+                        # Write phase occurs for CSRRW(I) or any RS/RC
+                        # instruction with a source that is not static
+                        # zero (x0 or a 0 immediate).
+                        funct3_is[0b001] | (self.inst[15:20] != 0),
+                        self.inst[12:14], # write phase taken from inst
+                        csr16.WriteMode.NONE,
+                    ),
+                ),
+            ]
+
         with m.Switch(self.ustate):
             with m.Case(UState.RESET):
                 m.d.sync += self.ustate.eq(UState.FETCH)
@@ -395,15 +470,38 @@ class Cpu(Component):
                     m.d.sync += self.hi.eq(~self.hi)
 
                 with m.If(~self.hi):
-                    # During the FETCH+lo state we will honor a halt request,
-                    # if present.
+                    # By default, we can generate a memory transaction
+                    # unconditionally, because we know we have somewhere to put
+                    # it.
+                    m.d.comb += self.bus.cmd.valid.eq(1)
+                    if self.has_interrupt:
+                        # Override this by handling an interrupt, if necessary.
+                        with m.If(self.irq & irq_enable):
+                            # Stop the fetch.
+                            m.d.comb += self.bus.cmd.valid.eq(0)
+                            m.d.comb += [
+                                mstatus.update.valid.eq(1),
+                                # Clear interrupt enable
+                                mstatus.update.payload[3].eq(0),
+                                # Transfer previous setting.
+                                mstatus.update.payload[7].eq(mstatus.read[3]),
+
+                                mepc.update.valid.eq(1),
+                                # Save interrupted PC into EPC.
+                                mepc.update.payload.eq(Cat(0, self.pc)),
+                            ]
+                            # Transfer state to enter interrupt.
+                            m.d.sync += [
+                                # Jump to the vector.
+                                self.pc.eq(mtvec.read[1:]),
+
+                                # Remain in FETCH state but repeat LOW phase.
+                                self.hi.eq(0),
+                            ]
+                    # Override this by honoring a halt request, if present.
                     with m.If(self.halt_request):
+                        m.d.comb += self.bus.cmd.valid.eq(0)
                         m.d.sync += self.ustate.eq(UState.HALTED)
-                    with m.Else():
-                        # Otherwise, we can generate a memory transaction
-                        # unconditionally, because we know we have somewhere to
-                        # put it.
-                        m.d.comb += self.bus.cmd.valid.eq(1)
                 with m.Else():
                     # Forward the fetch completion to the valid signal.
                     m.d.comb += self.bus.cmd.valid.eq(self.bus.resp.valid)
@@ -528,9 +626,10 @@ class Cpu(Component):
 
                 # Register write behavior
 
-                # Instructions that write a register do so unconditionally:
+                # Instructions that write a register:
                 m.d.comb += rf.write_cmd.valid.eq(
                     is_auipc_or_lui_or_jal | is_jalr | is_alu
+                    | (is_csr & self.hi)  # CSR writes high side first
                 )
                 # Register being written
                 m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
@@ -550,6 +649,7 @@ class Cpu(Component):
                         0b110: self.accum | adder_rhs,
                         0b111: self.accum & adder_rhs,
                     })),
+                    (is_csr, csr_file.cmd.payload.read if self.has_interrupt else 0),
                 ]))
 
                 # Register read for next cycle
@@ -581,6 +681,10 @@ class Cpu(Component):
                     (is_load | is_store, self.hi),
                 ]))
 
+                if self.has_interrupt:
+                    # CSR port driving
+                    m.d.comb += csr_file.cmd.valid.eq(is_csr)
+
                 # Assorted register update rules
 
                 m.d.sync += self.accum.eq(oneof([
@@ -609,7 +713,7 @@ class Cpu(Component):
                             self.pc,
                             pc_plus_4,
                         )),
-                        (is_load | is_b, self.pc),
+                        (is_load | is_b | is_csr, self.pc),
                     ]))
 
                 # Updates that only occur during low phase:
@@ -627,11 +731,13 @@ class Cpu(Component):
                     ~self.hi,
                     oneof([
                         (is_auipc_or_lui_or_jal, UState.OPERATE),
-                        (is_b | is_load_or_jalr | is_store | is_alu, UState.REG2),
+                        (is_b | is_load_or_jalr | is_store | is_alu | is_csr |
+                         is_mret, UState.REG2),
                     ]),
                     oneof([
-                        (is_auipc_or_lui_or_jal | is_jalr, UState.FETCH),
+                        (is_auipc_or_lui_or_jal | is_jalr | is_mret, UState.FETCH),
                         (is_b, UState.BRANCH),
+                        (is_csr, UState.CSR),
                         (is_load, mux(
                             self.bus.cmd.ready,
                             UState.LOAD,
@@ -663,6 +769,19 @@ class Cpu(Component):
                     self.hi,
                     ~self.hi,
                 ))
+
+                if self.has_interrupt:
+                    # Implement MRET.
+                    with m.If(is_mret & self.hi):
+                        m.d.comb += [
+                            mstatus.update.valid.eq(1),
+                            mstatus.update.payload[3].eq(
+                                mstatus.read[7],
+                            ),
+                            mstatus.update.payload[7].eq(1),
+
+                        ]
+                        m.d.sync += self.pc.eq(mepc.read[1:])
 
             with m.Case(UState.BRANCH):
                 m.d.comb += [
@@ -840,6 +959,23 @@ class Cpu(Component):
                     rf.write_cmd.valid.eq(1),
                 ]
                 m.d.sync += self.ustate.eq(UState.FETCH)
+
+            if self.has_interrupt:
+                with m.Case(UState.CSR):
+                    m.d.comb += [
+                        # note: self.hi is always low here
+                        rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi)),
+                        rf.write_cmd.payload.value.eq(
+                            csr_file.cmd.payload.read,
+                        ),
+                        rf.write_cmd.valid.eq(1),
+
+                        csr_file.cmd.valid.eq(is_csr),
+                    ]
+                    m.d.sync += [
+                        self.pc.eq(pc_plus_4),
+                        self.ustate.eq(UState.FETCH),
+                    ]
 
             with m.Case(UState.HALTED):
                 with m.If(self.debug.pc_write.valid):

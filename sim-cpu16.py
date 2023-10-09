@@ -207,11 +207,22 @@ def test_inst(name, inst, *, before = {}, after = {}):
         else:
             raise Exception(f"unexpected before key: {key}")
 
-    yield from write_mem(start_address, inst)
+    if isinstance(inst, int):
+        instruction_count = 1
+        yield from write_mem(start_address, inst)
+    elif isinstance(inst, list):
+        instruction_count = len(inst)
+        for (i, word) in enumerate(inst):
+            yield from write_mem(start_address + 4 * i, word)
+    else:
+        raise Exception(f"invalid instruction value: {inst}")
+
     yield from write_pc(start_address)
 
     yield phase.eq(TestPhase.RUN)
-    cycle_count = yield from single_step()
+    cycle_count = 0
+    for i in range(instruction_count):
+        cycle_count += yield from single_step()
 
     print(f"({cycle_count} cyc) ", end='')
 
@@ -244,7 +255,7 @@ def test_inst(name, inst, *, before = {}, after = {}):
                     f"r{r} should not have changed but is now 0x{actual:x}"
         if 'PC' not in after:
             actual = yield from read_pc()
-            value = start_address + 4
+            value = start_address + instruction_count * 4
             assert actual == value, \
                     f"PC should be 0x{value:x} but is 0x{actual:x}"
 
@@ -259,7 +270,9 @@ def test_inst(name, inst, *, before = {}, after = {}):
 
 if __name__ == "__main__":
     m = Module()
-    m.submodules.uut = uut = Cpu()
+    m.submodules.uut = uut = Cpu(
+        has_interrupt = True,
+    )
     m.submodules.mem = mem = TestMemory([
         0b00000000000000000000_00000_1101111, # JAL x0, .
     ])
@@ -700,6 +713,35 @@ if __name__ == "__main__":
                         1: result,
                     },
                 )
+
+        yield from test_inst(
+            f"CSRRWI x1, mscratch, 17",
+            0b0011_0100_0000_10001_101_00001_1110011,
+            after={
+                1: 0,
+            },
+        )
+        yield from test_inst(
+            f"CSRRS x1, mstatus, x3(=0xFF) / read back",
+            [
+                0b0011_0000_0000_00011_010_00001_1110011,
+                0b0011_0000_0000_00000_010_00010_1110011,
+            ],
+            before={
+                3: 0xFF,
+            },
+            after={
+                1: 0,
+                2: 0b1000_1000,
+            },
+        )
+
+        yield uut.irq.eq(1)
+        yield from resume()
+        yield
+        yield
+        yield
+
 
 
     sim.add_sync_process(process)
