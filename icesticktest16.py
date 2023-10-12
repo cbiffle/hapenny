@@ -1,5 +1,6 @@
 import itertools
 import random
+import argparse
 
 from amaranth import *
 from amaranth.lib.wiring import *
@@ -63,11 +64,16 @@ class TestMemory(Component):
 
 
 class Test(Elaboratable):
+    def __init__(self, has_interrupt = False):
+        super().__init__()
+
+        self.has_interrupt = has_interrupt
+
     def elaborate(self, platform):
         m = Module()
         m.submodules.cpu = cpu = Cpu(
             addr_width = BUS_ADDR_BITS + 1 + 1,
-            has_interrupt = True,
+            has_interrupt = self.has_interrupt,
         )
         random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
@@ -133,15 +139,24 @@ class Test(Elaboratable):
             return resources
 
         leds     = [res.o for res in get_all_resources("led")]
-        irq = platform.request("irq", 0)
-
         m.d.comb += [
-            cpu.irq.eq(irq.i),
             leds[0].eq(port.pins),
         ]
+        if self.has_interrupt:
+            irq = platform.request("irq", 0)
+            m.d.comb += [
+                cpu.irq.eq(irq.i),
+            ]
 
         return m
 
+parser = argparse.ArgumentParser(
+    prog = "icesticktest16",
+    description = "Script for synthesizing image for HX1K",
+)
+parser.add_argument('-i', '--interrupt-model', help = 'which interrupt model to use', action = 'store_true')
+args = parser.parse_args()
+
 p = ICEStickPlatform()
 p.resources["irq", 0] = Resource("irq", 0, Pins("78", dir="i"), Attrs(IO_STANDARD="SB_LVCMOS"))
-p.build(Test())
+p.build(Test(has_interrupt = args.interrupt_model))
