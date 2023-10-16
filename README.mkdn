@@ -207,6 +207,26 @@ the interrupt enable bit is tied to the context select bit. I may add an
 additional level of interrupt mask for this reason, but it's generally been okay
 in my simple tests.
 
+## Drawbacks
+
+- Written by someone who pretends to be an electrical engineer as a way to
+  procrastinate finishing his slides for a talk.
+
+- Used for exactly one thing so far, so not exactly battle-hardened.
+
+- Lower performance, clock-for-clock, than more mature implementations like
+  PicoRV32.
+
+- 16-bit external data bus means that, currently, 32-bit reads/writes are not
+  atomic -- a problem when interfacing with peripherals with 32-bit
+  memory-mapped registers. (Peripherals with 16-bit memory-mapped registers work
+  fine, however.)
+
+- Not exactly well factored/commented.
+
+- Written in Python, so chances are pretty good the code won't keep working
+  across OS updates / minor runtime versions.
+
 ## What's with the name
 
 `hapenny` is implemented using about half the logic of other cheap RV32 cores.
