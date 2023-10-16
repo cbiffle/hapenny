@@ -7,11 +7,11 @@ from amaranth.lib.enum import *
 from rv32 import StreamSig, AlwaysReady
 
 class RegFile16(Component):
-    read_cmd: In(StreamSig(6))
+    read_cmd: In(StreamSig(7))
     read_resp: Out(16)
 
     write_cmd: In(StreamSig(Signature({
-        'reg': Out(6),
+        'reg': Out(7),
         'value': Out(16),
     })))
 
@@ -23,11 +23,12 @@ class RegFile16(Component):
     def elaborate(self, platform):
         m = Module()
 
-        nregs = 2 * (16 if self.rv32e else 32)
+        contexts = 2
+        nregs = contexts * (16 if self.rv32e else 32)
 
         m.submodules.mem = mem = Memory(
             width = 16,
-            depth = nregs,
+            depth = 2 * nregs,
             name = "regfile",
         )
 

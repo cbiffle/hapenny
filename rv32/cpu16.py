@@ -11,14 +11,16 @@ from rv32.bus import BusPort
 from rv32.csr16 import CsrFile16, CsrReg
 
 DebugPort = Signature({
-    'reg_read': Out(StreamSig(6)),
+    'reg_read': Out(StreamSig(7)),
     'reg_value': In(AlwaysReady(16)),
     'reg_write': Out(StreamSig(Signature({
-        'addr': Out(6),
+        'addr': Out(7),
         'value': Out(16),
     }))),
-    'pc': Out(32),
+    'pc': In(32),
     'pc_write': Out(StreamSig(32)),
+    'ctx': Out(1),
+    'ctx_write': In(StreamSig(1)),
 })
 
 # Builds a mux but out of AND and OR, which often generates cheaper logic on
@@ -123,6 +125,7 @@ class Opcode(Enum):
     ALUIMM = 0b00100
     ALUREG = 0b01100
     SYSTEM = 0b11100
+    CUSTOM0 = 0b00001
 
 class Cpu(Component):
     halt_request: In(1)
@@ -132,22 +135,31 @@ class Cpu(Component):
 
     def __init__(self, *,
                  addr_width = 32,
-                 has_interrupt = False,
+                 has_interrupt = None,
                  relax_instruction_alignment = False):
         super().__init__()
 
         self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         self.has_interrupt = has_interrupt
-        if has_interrupt:
+        if has_interrupt is not None:
+            assert has_interrupt in ['m', 'fast'], \
+                    f"unknown value for has_interrupt: {has_interrupt}"
             self.irq = Signal(1)
 
         self.addr_width = addr_width
         self.relax_instruction_alignment = relax_instruction_alignment
 
+        if self.has_interrupt == "fast":
+            self.npcs = 2
+            self.ctx = Signal(1)
+        else:
+            self.npcs = 1
+            self.ctx = Signal(0)
+
         self.ustate = Signal(UState, reset = UState.RESET) # TODO
         self.hi = Signal(1)
-        self.pc = Signal(addr_width - 1)
+        self.pc = Array(Signal(addr_width - 1) for _ in range(self.npcs))
         self.inst = Signal(32)
 
         self.accum = Signal(16)
@@ -163,7 +175,7 @@ class Cpu(Component):
 
         m.submodules.regfile = rf = RegFile16()
 
-        if self.has_interrupt:
+        if self.has_interrupt == "m":
             m.submodules.mstatus = mstatus = CsrReg(
                 name = "mstatus",
                 width = 8,
@@ -194,10 +206,12 @@ class Cpu(Component):
             irq_enable = mstatus.read[3]
 
         pc_plus_4 = Signal(self.addr_width - 1)
-        m.d.comb += pc_plus_4.eq(self.pc + 2)
+        m.d.comb += pc_plus_4.eq(self.pc[self.ctx] + 2)
 
         opcode = Signal(5)
         inst_rd = Signal(5)
+        inst_rs1 = Signal(5)
+        inst_rs2 = Signal(5)
 
         # Instruction decode strobes. These are all registered and are available
         # one cycle after the inst contents are latched.
@@ -213,6 +227,9 @@ class Cpu(Component):
         is_system = Signal(1)
         is_csr = Signal(1)
         is_mret = Signal(1)
+        is_custom0 = Signal(1)
+        is_flip = Signal(1)
+        is_xpc = Signal(1)
 
         # Instruction group decode strobes. Also registered. These are basically
         # manual retiming of the instruction comparison logic, because my tools
@@ -233,6 +250,8 @@ class Cpu(Component):
         m.d.comb += [
             opcode.eq(self.inst[2:7]),
             inst_rd.eq(self.inst[7:12]),
+            inst_rs1.eq(self.inst[15:20]),
+            inst_rs2.eq(self.inst[20:25]),
         ]
 
         m.submodules.funct3_is = Decoder(8)
@@ -262,10 +281,12 @@ class Cpu(Component):
             is_alu_ri.eq(opcode == Opcode.ALUIMM),
             is_alu.eq((opcode == Opcode.ALUREG) | (opcode == Opcode.ALUIMM)),
             is_system.eq(opcode == Opcode.SYSTEM),
+            is_custom0.eq(opcode == Opcode.CUSTOM0),
 
             is_imm_i.eq(
                 (opcode == Opcode.Lxx) | (opcode == Opcode.JALR)
                 | ((opcode == Opcode.ALUIMM) & ~(funct3_is[0b010] | funct3_is[0b011]))
+                | (opcode == Opcode.CUSTOM0)
             ),
             is_neg_imm_i.eq(
                 (opcode == Opcode.ALUIMM) & (funct3_is[0b010] | funct3_is[0b011])
@@ -280,12 +301,28 @@ class Cpu(Component):
         ]
         # Only implement decode logic for these instructions if necessary, to
         # save area in the baseline implementation.
-        if self.has_interrupt:
+        if self.has_interrupt == "m":
             m.d.sync += [
                 is_csr.eq((opcode == Opcode.SYSTEM) & ~funct3_is[0b000]),
                 is_mret.eq((opcode == Opcode.SYSTEM) & funct3_is[0b000]
                            & (self.inst[25:] == 0b0011000)),
             ]
+        if self.has_interrupt == "fast":
+            m.d.sync += [
+                is_flip.eq((opcode == Opcode.CUSTOM0) & funct3_is[0b000]),
+                is_xpc.eq((opcode == Opcode.CUSTOM0) & funct3_is[0b001]),
+            ]
+
+        inst_rd_ctx = Signal(1)
+        inst_rs2_ctx = Signal(1)
+        if self.has_interrupt == 'fast':
+            m.d.comb += [
+                inst_rd_ctx.eq((is_alu_rr & self.inst[29]) ^ self.ctx),
+                inst_rs2_ctx.eq((is_alu_rr & self.inst[27]) ^ self.ctx),
+            ]
+        else:
+            m.d.comb += inst_rd_ctx.eq(self.ctx)
+            m.d.comb += inst_rs2_ctx.eq(self.ctx)
 
         # Immediate encodings
         imm_i = Signal(32)
@@ -306,7 +343,8 @@ class Cpu(Component):
 
         m.d.comb += [
             self.halted.eq(self.ustate == UState.HALTED),
-            self.debug.pc.eq(Cat(0, self.pc)),
+            self.debug.pc.eq(Cat(0, self.pc[self.ctx])),
+            self.debug.ctx.eq(self.ctx),
         ]
 
         adder_carry_in = Signal(1)
@@ -416,18 +454,18 @@ class Cpu(Component):
         pc31_plus_hi = Signal(self.addr_width - 1)
         if self.relax_instruction_alignment:
             # have to use an adder here as we may go from 2-mod-4 to 0-mod-4
-            m.d.comb += pc31_plus_hi.eq(self.pc + self.hi)
+            m.d.comb += pc31_plus_hi.eq(self.pc[self.ctx] + self.hi)
         else:
-            m.d.comb += pc31_plus_hi.eq(self.pc | self.hi)
+            m.d.comb += pc31_plus_hi.eq(self.pc[self.ctx] | self.hi)
 
-        if self.has_interrupt:
+        if self.has_interrupt == "m":
             # CSR port driving
             m.d.comb += [
                 # We DO NOT set valid here. That happens in OPERATE et al.
                 csr_file.cmd.payload.write.eq(oneof([
                     # Immediate versions have inst14 set. We only pass the
                     # immediate through on the low phase.
-                    (self.inst[14] & ~self.hi, self.inst[15:20]),
+                    (self.inst[14] & ~self.hi, inst_rs1),
                     # Register versions write the accumulator on both phases.
                     (~self.inst[14], self.accum),
                 ])),
@@ -438,7 +476,7 @@ class Cpu(Component):
                         # Write phase occurs for CSRRW(I) or any RS/RC
                         # instruction with a source that is not static
                         # zero (x0 or a 0 immediate).
-                        funct3_is[0b001] | (self.inst[15:20] != 0),
+                        funct3_is[0b001] | (inst_rs1 != 0),
                         self.inst[12:14], # write phase taken from inst
                         csr16.WriteMode.NONE,
                     ),
@@ -474,7 +512,7 @@ class Cpu(Component):
                     # unconditionally, because we know we have somewhere to put
                     # it.
                     m.d.comb += self.bus.cmd.valid.eq(1)
-                    if self.has_interrupt:
+                    if self.has_interrupt == "m":
                         # Override this by handling an interrupt, if necessary.
                         with m.If(self.irq & irq_enable):
                             # Stop the fetch.
@@ -488,13 +526,24 @@ class Cpu(Component):
 
                                 mepc.update.valid.eq(1),
                                 # Save interrupted PC into EPC.
-                                mepc.update.payload.eq(Cat(0, self.pc)),
+                                mepc.update.payload.eq(Cat(0, self.pc[self.ctx])),
                             ]
                             # Transfer state to enter interrupt.
                             m.d.sync += [
                                 # Jump to the vector.
-                                self.pc.eq(mtvec.read[1:]),
+                                self.pc[self.ctx].eq(mtvec.read[1:]),
 
+                                # Remain in FETCH state but repeat LOW phase.
+                                self.hi.eq(0),
+                            ]
+                    if self.has_interrupt == "fast":
+                        # Override this by handling an interrupt, if necessary.
+                        with m.If(self.irq & self.ctx):
+                            # Stop the fetch.
+                            m.d.comb += self.bus.cmd.valid.eq(0)
+                            m.d.sync += [
+                                # Flip to the zero context.
+                                self.ctx.eq(0),
                                 # Remain in FETCH state but repeat LOW phase.
                                 self.hi.eq(0),
                             ]
@@ -551,7 +600,7 @@ class Cpu(Component):
                     m.d.comb += [
                         rf.read_cmd.valid.eq(1),
                         rf.read_cmd.payload.eq(
-                            Cat(self.inst[15], self.bus.resp.payload[0:4]),
+                            Cat(self.inst[15], self.bus.resp.payload[0:4], self.ctx),
                         ),
                     ]
 
@@ -572,8 +621,8 @@ class Cpu(Component):
                     # Load program counter instead.
                     m.d.sync += self.accum.eq(mux(
                         self.hi,
-                        self.pc[15:],
-                        Cat(0, self.pc[:15]),
+                        self.pc[self.ctx][15:],
+                        Cat(0, self.pc[self.ctx][:15]),
                     ))
                 with m.Elif(is_lui):
                     m.d.sync += self.accum.eq(0)
@@ -586,8 +635,9 @@ class Cpu(Component):
                 m.d.comb += [
                     rf.read_cmd.valid.eq(1),
                     rf.read_cmd.payload.eq(Cat(
-                        self.inst[20:25],
+                        inst_rs2,
                         self.hi & ~is_store,
+                        inst_rs2_ctx,
                     )),
                 ]
 
@@ -603,7 +653,7 @@ class Cpu(Component):
 
                 # Adder configuration
 
-                # Value used on right hand side:
+                # Carry input:
                 m.d.comb += adder_carry_in.eq(oneof([
                     (is_b, saved_carry | ~self.hi),
                     (is_alu_ri, mux(
@@ -620,7 +670,7 @@ class Cpu(Component):
                             self.inst[30],
                         ),
                     )),
-                    (is_auipc_or_lui_or_jal | is_load_or_jalr | is_store,
+                    (is_auipc_or_lui_or_jal | is_load_or_jalr | is_store | is_xpc,
                      saved_carry),
                 ]))
 
@@ -630,9 +680,10 @@ class Cpu(Component):
                 m.d.comb += rf.write_cmd.valid.eq(
                     is_auipc_or_lui_or_jal | is_jalr | is_alu
                     | (is_csr & self.hi)  # CSR writes high side first
+                    | is_xpc
                 )
                 # Register being written
-                m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi))
+                m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi, inst_rd_ctx))
                 # Value written to a register:
                 m.d.comb += rf.write_cmd.payload.value.eq(oneof([
                     (is_auipc_or_lui, adder_result),
@@ -649,22 +700,29 @@ class Cpu(Component):
                         0b110: self.accum | adder_rhs,
                         0b111: self.accum & adder_rhs,
                     })),
-                    (is_csr, csr_file.cmd.payload.read if self.has_interrupt else 0),
+                    (is_csr,
+                     csr_file.cmd.payload.read \
+                             if self.has_interrupt == "m" else 0),
+                    (is_xpc, mux(
+                        self.hi,
+                        self.pc[~self.ctx][15:],
+                        self.pc[~self.ctx][:15],
+                    )),
                 ]))
 
                 # Register read for next cycle
 
                 m.d.comb += rf.read_cmd.valid.eq(oneof([
-                    (is_jalr | is_b | is_alu | is_store, 1),
+                    (is_jalr | is_b | is_alu | is_store | is_xpc, 1),
                     (is_load, ~self.hi),
                 ]))
                 m.d.comb += rf.read_cmd.payload.eq(mux(
                     is_store & self.hi,
-                    Cat(self.inst[20:25], 1),
+                    Cat(inst_rs2, 1, inst_rs2_ctx),
                     mux(
                         is_alu,
-                        Cat(self.inst[15:20], ~self.hi),
-                        Cat(self.inst[15:20], 1),
+                        Cat(inst_rs1, ~self.hi, self.ctx),
+                        Cat(inst_rs1, 1, self.ctx),
                     ),
                 ))
 
@@ -681,16 +739,16 @@ class Cpu(Component):
                     (is_load | is_store, self.hi),
                 ]))
 
-                if self.has_interrupt:
+                if self.has_interrupt == "m":
                     # CSR port driving
                     m.d.comb += csr_file.cmd.valid.eq(is_csr)
 
                 # Assorted register update rules
 
                 m.d.sync += self.accum.eq(oneof([
-                    (is_auipc_or_jal, self.pc[15:]),
+                    (is_auipc_or_jal, self.pc[self.ctx][15:]),
                     (is_lui, 0),
-                    (is_b, Cat(0, self.pc[:15])),
+                    (is_b, Cat(0, self.pc[self.ctx][:15])),
                     (is_alu, self.accum),
                 ]))
 
@@ -703,24 +761,31 @@ class Cpu(Component):
                     self.last_signed_less_than.eq(signed_less_than),
                 ]
 
+                if self.has_interrupt == 'fast':
+                    with m.If(is_xpc & self.hi):
+                        m.d.sync += self.pc[~self.ctx].eq(
+                            Cat(self.shadow_pc, adder_result)
+                        )
+
                 # Updates that only occur during hi phase:
                 with m.If(self.hi):
-                    m.d.sync += self.pc.eq(oneof([
-                        (is_auipc_or_lui | is_alu, pc_plus_4),
+                    m.d.sync += self.pc[self.ctx].eq(oneof([
+                        (is_auipc_or_lui | is_alu | is_xpc | is_flip, pc_plus_4),
                         (is_jal_or_jalr, Cat(self.shadow_pc, adder_result)),
                         (is_store, mux(
                             self.bus.cmd.ready & funct3_is[0b010],
-                            self.pc,
+                            self.pc[self.ctx],
                             pc_plus_4,
                         )),
-                        (is_load | is_b | is_csr, self.pc),
+                        (is_load | is_b | is_csr, self.pc[self.ctx]),
                     ]))
+                    m.d.sync += self.ctx.eq(self.ctx ^ is_flip)
 
                 # Updates that only occur during low phase:
                 with m.If(~self.hi):
                     m.d.sync += self.mar_lo.eq(adder_result)
                     m.d.sync += self.shift_amt.eq(oneof([
-                        (is_alu_ri, self.inst[20:25]),
+                        (is_alu_ri, inst_rs2),
                         (is_alu_rr, rf.read_resp[:5]),
                     ]))
                     m.d.sync += self.shift_lo.eq(self.accum)
@@ -730,7 +795,7 @@ class Cpu(Component):
                 m.d.sync += self.ustate.eq(mux(
                     ~self.hi,
                     oneof([
-                        (is_auipc_or_lui_or_jal, UState.OPERATE),
+                        (is_auipc_or_lui_or_jal | is_xpc | is_flip, UState.OPERATE),
                         (is_b | is_load_or_jalr | is_store | is_alu | is_csr |
                          is_mret, UState.REG2),
                     ]),
@@ -762,6 +827,7 @@ class Cpu(Component):
                             0b110: UState.FETCH,
                             0b111: UState.FETCH,
                         })),
+                        (is_flip | is_xpc, UState.FETCH),
                     ]),
                 ))
                 m.d.sync += self.hi.eq(mux(
@@ -770,7 +836,7 @@ class Cpu(Component):
                     ~self.hi,
                 ))
 
-                if self.has_interrupt:
+                if self.has_interrupt == "m":
                     # Implement MRET.
                     with m.If(is_mret & self.hi):
                         m.d.comb += [
@@ -781,7 +847,7 @@ class Cpu(Component):
                             mstatus.update.payload[7].eq(1),
 
                         ]
-                        m.d.sync += self.pc.eq(mepc.read[1:])
+                        m.d.sync += self.pc[self.ctx].eq(mepc.read[1:])
 
             with m.Case(UState.BRANCH):
                 m.d.comb += [
@@ -798,7 +864,7 @@ class Cpu(Component):
                 ]
                 with m.If(~branch_taken):
                     m.d.sync += [
-                        self.pc.eq(pc_plus_4),
+                        self.pc[self.ctx].eq(pc_plus_4),
                         self.ustate.eq(UState.FETCH),
                     ]
                 with m.Else():
@@ -807,12 +873,12 @@ class Cpu(Component):
                     ]
                     with m.If(self.hi):
                         m.d.sync += [
-                            self.pc.eq(Cat(self.shadow_pc, adder_result)),
+                            self.pc[self.ctx].eq(Cat(self.shadow_pc, adder_result)),
                             self.ustate.eq(UState.FETCH)
                         ]
                     with m.Else():
                         m.d.sync += [
-                            self.accum.eq(self.pc[15:]),
+                            self.accum.eq(self.pc[self.ctx][15:]),
                             self.ustate.eq(UState.BRANCH)
                         ]
 
@@ -856,7 +922,7 @@ class Cpu(Component):
                                 m.d.sync += self.ustate.eq(UState.FILL_MSBS)
                     with m.Else():
                         m.d.sync += [
-                            self.pc.eq(pc_plus_4),
+                            self.pc[self.ctx].eq(pc_plus_4),
                             self.ustate.eq(UState.FETCH),
                         ]
 
@@ -886,7 +952,7 @@ class Cpu(Component):
                 ]
                 with m.If(self.bus.cmd.ready):
                     m.d.sync += [
-                        self.pc.eq(pc_plus_4),
+                        self.pc[self.ctx].eq(pc_plus_4),
                         self.ustate.eq(UState.FETCH),
                     ]
 
@@ -897,7 +963,7 @@ class Cpu(Component):
                     rf.write_cmd.valid.eq(1),
                 ]
                 m.d.sync += [
-                    self.pc.eq(pc_plus_4),
+                    self.pc[self.ctx].eq(pc_plus_4),
                     self.ustate.eq(UState.FETCH),
                     self.hi.eq(~self.hi),
                 ]
@@ -942,7 +1008,7 @@ class Cpu(Component):
                     rf.write_cmd.valid.eq(1),
                 ]
                 m.d.sync += [
-                    self.pc.eq(pc_plus_4),
+                    self.pc[self.ctx].eq(pc_plus_4),
                     self.ustate.eq(UState.FETCH),
                 ]
 
@@ -960,11 +1026,11 @@ class Cpu(Component):
                 ]
                 m.d.sync += self.ustate.eq(UState.FETCH)
 
-            if self.has_interrupt:
+            if self.has_interrupt == "m":
                 with m.Case(UState.CSR):
                     m.d.comb += [
                         # note: self.hi is always low here
-                        rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi)),
+                        rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi, inst_rd_ctx)),
                         rf.write_cmd.payload.value.eq(
                             csr_file.cmd.payload.read,
                         ),
@@ -973,13 +1039,15 @@ class Cpu(Component):
                         csr_file.cmd.valid.eq(is_csr),
                     ]
                     m.d.sync += [
-                        self.pc.eq(pc_plus_4),
+                        self.pc[self.ctx].eq(pc_plus_4),
                         self.ustate.eq(UState.FETCH),
                     ]
 
             with m.Case(UState.HALTED):
                 with m.If(self.debug.pc_write.valid):
-                    m.d.sync += self.pc.eq(self.debug.pc_write.payload[1:])
+                    m.d.sync += self.pc[self.ctx].eq(self.debug.pc_write.payload[1:])
+                with m.If(self.debug.ctx_write.valid):
+                    m.d.sync += self.ctx.eq(self.debug.ctx_write.payload)
 
                 m.d.comb += [
                     self.debug.reg_read.ready.eq(1),

@@ -64,7 +64,7 @@ class TestMemory(Component):
 
 
 class Test(Elaboratable):
-    def __init__(self, has_interrupt = False):
+    def __init__(self, has_interrupt = None):
         super().__init__()
 
         self.has_interrupt = has_interrupt
@@ -142,7 +142,7 @@ class Test(Elaboratable):
         m.d.comb += [
             leds[0].eq(port.pins),
         ]
-        if self.has_interrupt:
+        if self.has_interrupt is not None:
             irq = platform.request("irq", 0)
             m.d.comb += [
                 cpu.irq.eq(irq.i),
@@ -154,7 +154,7 @@ parser = argparse.ArgumentParser(
     prog = "icesticktest16",
     description = "Script for synthesizing image for HX1K",
 )
-parser.add_argument('-i', '--interrupt-model', help = 'which interrupt model to use', action = 'store_true')
+parser.add_argument('-i', '--interrupt-model', help = 'which interrupt model to use', required = False, choices = ['m', 'fast'])
 args = parser.parse_args()
 
 p = ICEStickPlatform()
