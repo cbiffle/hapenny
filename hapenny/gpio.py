@@ -3,8 +3,8 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
-from rv32 import StreamSig, AlwaysReady
-from rv32.bus import BusPort
+from hapenny import StreamSig, AlwaysReady
+from hapenny.bus import BusPort
 
 class OutputPort(Component):
     bus: In(BusPort(addr = 0, data = 16))

@@ -8,10 +8,10 @@ from amaranth.build import ResourceError, Resource, Pins, Attrs
 from amaranth_boards.test.blinky import Blinky
 from amaranth_boards.icestick import ICEStickPlatform
 
-from rv32 import StreamSig
-from rv32.cpu16 import Cpu
-from rv32.bus import BusPort, SimpleFabric, partial_decode
-from rv32.gpio import OutputPort
+from hapenny import StreamSig
+from hapenny.cpu16 import Cpu
+from hapenny.bus import BusPort, SimpleFabric, partial_decode
+from hapenny.gpio import OutputPort
 
 RAM_WORDS = 256 * 1
 BUS_ADDR_BITS = (RAM_WORDS - 1).bit_length()

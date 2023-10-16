@@ -5,10 +5,10 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
-from rv32 import StreamSig, AlwaysReady, csr16
-from rv32.regfile16 import RegFile16
-from rv32.bus import BusPort
-from rv32.csr16 import CsrFile16, CsrReg
+from hapenny import StreamSig, AlwaysReady, csr16
+from hapenny.regfile16 import RegFile16
+from hapenny.bus import BusPort
+from hapenny.csr16 import CsrFile16, CsrReg
 
 DebugPort = Signature({
     'reg_read': Out(StreamSig(7)),

@@ -3,7 +3,7 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
-from rv32 import StreamSig, AlwaysReady
+from hapenny import StreamSig, AlwaysReady
 
 class BusCmd(Signature):
     def __init__(self, *, addr, data):

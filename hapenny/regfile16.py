@@ -4,7 +4,7 @@ from amaranth import *
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 
-from rv32 import StreamSig, AlwaysReady
+from hapenny import StreamSig, AlwaysReady
 
 class RegFile16(Component):
     read_cmd: In(StreamSig(7))

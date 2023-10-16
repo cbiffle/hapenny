@@ -1,7 +1,7 @@
 [project]
 dynamic = ["version"]
 
-name = "rv32"
+name = "hapenny"
 
 requires-python = "~=3.8"
 dependencies = [

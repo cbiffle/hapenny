@@ -4,10 +4,10 @@ from amaranth.back import verilog
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 
-from rv32.cpu16 import Cpu
-from rv32.bus import BusPort, partial_decode, SimpleFabric
-from rv32.gpio import OutputPort
-from rv32 import *
+from hapenny.cpu16 import Cpu
+from hapenny.bus import BusPort, partial_decode, SimpleFabric
+from hapenny.gpio import OutputPort
+from hapenny import *
 
 class TestPhase(Enum):
     INIT = 0
