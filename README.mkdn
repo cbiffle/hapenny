@@ -1,0 +1,216 @@
+# `hapenny`: a half-width RISC-V
+
+`hapenny` is a 32-bit RISC-V CPU implementation that operates internally on
+16-bit chunks. This means it takes longer to do things, but uses less space.
+
+This approach was inspired by the MC68000 (1979), which also implemented a
+32-bit instruction set using a 16-bit datapath. (`hapenny` comes very close to
+the original MC68000 in cycles-per-instruction, in fact.)
+
+`hapenny` was written to evaluate the Amaranth HDL.
+
+## Bullet points
+
+- Gets about 10 32-bit MIPS on an iCE40 HX1K. (About twice that on an ECP5.)
+- A basic SoC with tiny RAM takes only 60% of an HX1K. (Or ~1% of an ECP5.)
+- 16-bit external bus saves space for simple peripherals and RAMs.
+- Parameterized address bus width can be adjusted for your system.
+- Implements the RV32I unprivileged instruction set (currently missing FENCE and
+  SYSTEM).
+- Optional interrupt support using standard M-mode-style interrupts, or a novel
+  fast interrupt mechanism offering much better response times in less area.
+- Written in Python using Amaranth.
+
+## But why
+
+There are a bazillion open-source RISC-V CPU implementations out there, which is
+what happens when you release a well-designed and free-to-implement instruction
+set spec -- nerds like me will crank out implementations.
+
+I wrote `hapenny` as an experiment to see if I could target the space between
+the PicoRV32 core and the SERV core, in terms of size and performance. I
+specifically wanted to produce a CPU with decent performance that could fit into
+an iCE40 HX1K part (like on the Icestick evaluation board) with enough space
+left over for useful logic. PicoRV32 doesn't quite fit on that chip; SERV fits
+but takes 32-64 cycles per instruction.
+
+| Property | PicoRV32-small | `hapenny` | SERV |
+| -------- | -------- | --------- | ---- |
+| Datapath width (bits) | 32 | **16** | 1 |
+| External data bus width | 32 | **16** | 32 |
+| Average cycles per instruction | 4-ish | **7-ish** | 40-ish |
+| Minimal size on iCE40 (LCs) | 1500-ish | **787** | 200-ish |
+| Typical MHz on iCE40 | 40s? | **72** | 40s? |
+
+(I would appreciate help getting apples-to-apples comparison numbers!)
+
+So, basically, PicoRV32 is higher performance, SERV is smaller, but if you need
+more instructions-per-clock than SERV without the size of PicoRV32... `hapenny`
+might be useful to you.
+
+Independent from the datapath width, I also did some fairly aggressive manual
+register retiming in the decoder and datapath, which means `hapenny` can often
+close timing at higher Fmax than other simple RV32 cores. (I miss automatic
+retiming from ASIC toolchains.)
+
+## Details
+
+`hapenny` executes (most of) the RV32I instruction set in 16-bit pieces. It uses
+16-bit memory, a 16-bit register file, and a 16-bit ALU. To perform 32-bit
+operations, it uses the same techniques a programmer might use in software on a
+16-bit computer, e.g. "chaining" operations using preserved carry/zero bits.
+
+All memory interfaces in `hapenny` are synchronous, including the register file,
+which is another reason why operations take more cycles. The RV32I register file
+is comparatively large (at 1024 bits), and using a synchronous register file
+ensures that it can be mapped into an FPGA block RAM if desired.
+
+Here's what the CPU does during the timing of a typical instruction like `ADD`.
+
+![A timing diagram showing a typical instruction cycle.](doc/instruction-cycle.svg)
+
+- The FETCH states (lo and hi) address the two halves of the 32-bit RV32
+  instruction in 16-bit memory. The hi state also latches the lo half of the
+  instruction.
+- The INST state latches the rest of the instruction and performs some initial
+  decoding. In particular, it sets up the read of the low half of the first
+  source register (RS1L).
+- The REG2 state reads the second source register (RS2L or H) and latches the
+  read result for the first source register into a hidden accumulator.
+- The OP state uses the now-available data from RS2L/H to perform the requested
+  operation (such as addition). After the lo OP state, the C and Z flags are set
+  to chain the halves of the operation together.
+- REG2 and OP repeat to process the high half.
+
+Most instructions take seven cycles, as shown in that diagram. Some take more if
+they need to do additional things (by adding states); others take less if they
+don't need to access two registers (by removing the second REG2 state). The CPU
+test bench measures the cycle timing for every instruction; here's where things
+currently stand:
+
+| Instruction | Cycles | Notes |
+| ----------- | ------ | ----- |
+| AUIPC | 6 | |
+| LUI | 6 | |
+| JAL | 6 | |
+| JALR | 7 | |
+| Branch | 8/9 | Not Taken / Taken |
+| Load | 9 | |
+| SW | 8 | |
+| SB/SH | 7 | |
+| SLT(I)(U) | 8 | |
+| Shift | 9 + N | N is number of bits shifted |
+| Other ALU op | 7 | |
+| CSR ops | 8 | (if enabled) |
+
+This is why I describe the cycles-per-instruction as "7-ish." The precise
+throughput will depend on your program.
+
+## Interfaces
+
+`hapenny` uses a very simple ready/valid bus interface with up to 32-bit
+addressing. In practice, applications will wire up fewer than 32 address lines,
+which saves space.
+
+The PC can be shrunk separately from the address bus if you know that all
+program memory appears in e.g. the bottom half of the address space. This
+further saves space.
+
+If interrupts are implemented, `hapenny` exposes a single active-high `irq`
+signal.  This will interrupt the CPU at the next instruction boundary.
+
+Finally, `hapenny` exposes a fairly flexible debug interface capable of
+inspecting processor state and reading and writing the register file. These
+feautres are only available when the processor is halted, which can be achieved
+by holding `halt_request` high until the processor confirms (at the next
+instruction boundary) by asserting `halted`. Release `halt_request` to resume.
+
+## Interrupt options
+
+`hapenny` provides three interrupt implementation options of increasing cost.
+(Cycle counts here are worst-case assuming no wait-states. LC counts are using a
+simple system with an IRQ line wired to a pad, even in the No IRQ case, for
+consistency.)
+
+| Mode | LCs | Entry cycles | Exit cycles |
+| ---- | --- | ------------ | ----------- |
+| No IRQs | 792 | n/a | n/a |
+| Standard IRQ | 1026 | 136 | 159 |
+| Fast IRQ | 925 | 1 | 7 |
+
+### No interrupts
+
+By default, the CPU does not implement interrupts. This is the smallest option.
+
+### Standard-ish M-mode interrupts
+
+Setting `has_interrupt` to `"m"` enables the M-mode interrupt support described
+in the RISC-V Privileged ISA Spec: the `mstatus`, `mscratch`, and `mepc` CSRs
+become available and the `mret` instruction is implemented. This requires the
+CSR file and instruction set, and is the largest option.
+
+`hapenny` implements only a single interrupt in this mode, level-sensitive on
+the `irq` line. More interrupts means more area, and this mode barely fits into
+an HX1K as it is; if you need to, you can add an external interrupt mux.
+
+Getting from entry to an ISR using this model to an arbitrary function written
+in a high level language -- i.e. saving caller-save register state -- takes 136
+cycles. Getting back out (restoring) takes 159 cycles. A smart compiler that
+only saves registers that are in use can reduce this for simple ISRs, but the
+state save/restore is still a pretty significant cost.
+
+### Custom fast interrupts
+
+Setting `has_interrupt` to `"fast"` enables a custom `hapenny`-specific
+interrupt mode that allows a much smaller circuit than standard interrupts and
+offers much lower response time. This exploits the fact that `hapenny`'s
+register file is usually implemented in a block RAM that is larger than the
+register file by at least 2x -- so, we duplicate the register file into two
+banks.
+
+The changes are as follows:
+
+- The register file is extended to two identical banks of 32 registers. (Well,
+  31, really, since register 0 is constant in both banks.)
+- The program counter is also duplicated.
+- At any given time, the processor is executing out of one bank/PC or the other,
+  as controlled by its `ctx` (context) bit.
+- If running out of context 0, which is the default at reset, interrupts are
+  disabled.
+- If running out of context 1, interrupts are enabled, and any interrupt will
+  switch execution back to context 0 at the next instruction boundary.
+- Reserved bits in the ALU (register-register) instructions are reappropriated
+  to describe cross-context register operations. Specifically,
+  - Setting bit 29 indicates that the destination register (rd) is in the
+    opposite context.
+  - Setting bit 27 indicates that the second source register (rs2) is in the
+    opposite context.
+- Reserved instructions in the CUSTOM0 encoding space are implemented to perform
+  two `hapenny`-specific operations (all using I-format):
+  - `FLIP` (funct3=0b000) switches to the other context.
+  - `XPC` (funct3=0b001) reads PC from the other context into RD, and writes the
+    PC in the other context from RS1.
+
+Writing code to make use of this is a little unusual, since it basically runs
+the interrupt handling code as a coroutine. That is, the code at reset will set
+up the other context's registers and then `FLIP` into it; when an interrupt
+occurs, execution will resume at the next instruction after the `FLIP`. So
+interrupt handling winds up being a loop.
+
+This provides very fast interrupt response: taking an interrupt costs one
+additional cycle at the next instruction boundary, and returning from an
+interrupt requires only a 7-cycle `FLIP` instruction.
+
+**Note:** code that wants to disable interrupts and perform some actions before
+renabling interrupts will become more complex with this interrupt model, since
+the interrupt enable bit is tied to the context select bit. I may add an
+additional level of interrupt mask for this reason, but it's generally been okay
+in my simple tests.
+
+## What's with the name
+
+`hapenny` is implemented using about half the logic of other cheap RV32 cores.
+
+The half-penny, or "ha'penny," is a historical English coin worth (as the name
+implies) half a penny. So if the other cheap cores cost a penny, this is a
+ha'penny.
