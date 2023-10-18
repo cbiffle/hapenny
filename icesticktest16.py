@@ -45,19 +45,10 @@ class TestMemory(Component):
             wp.data.eq(self.bus.cmd.payload.data),
             wp.en[0].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]),
             wp.en[1].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]),
-
-            # Nothing causes this memory to stop being available.
-            self.bus.cmd.ready.eq(1),
         ]
 
-        # Delay the read enable signal by one cycle to use as output valid.
-        # TODO this isn't really correct and ignores ready.
-        delayed_read = Signal(1)
-        m.d.sync += delayed_read.eq(rp.en)
-
         m.d.comb += [
-            self.bus.resp.valid.eq(delayed_read),
-            self.bus.resp.payload.eq(rp.data),
+            self.bus.resp.eq(rp.data),
         ]
 
         return m

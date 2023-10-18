@@ -16,8 +16,6 @@ class OutputPort(Component):
     def elaborate(self, platform):
         m = Module()
 
-        m.d.comb += self.bus.cmd.ready.eq(1)
-
         with m.If(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]):
             m.d.sync += self.pins[:8].eq(self.bus.cmd.payload.data[:8])
         with m.If(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]):

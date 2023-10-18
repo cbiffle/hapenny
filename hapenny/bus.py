@@ -20,8 +20,8 @@ class BusCmd(Signature):
 class BusPort(Signature):
     def __init__(self, *, addr, data):
         super().__init__({
-            'cmd': Out(StreamSig(BusCmd(addr=addr, data=data))),
-            'resp': In(StreamSig(data)),
+            'cmd': Out(AlwaysReady(BusCmd(addr=addr, data=data))),
+            'resp': In(data),
         })
 
 def partial_decode(m, bus, width):
@@ -31,11 +31,8 @@ def partial_decode(m, bus, width):
         bus.cmd.payload.data.eq(port.cmd.payload.data),
         bus.cmd.payload.lanes.eq(port.cmd.payload.lanes),
         bus.cmd.valid.eq(port.cmd.valid),
-        port.cmd.ready.eq(bus.cmd.ready),
 
-        port.resp.valid.eq(bus.resp.valid),
-        port.resp.payload.eq(bus.resp.payload),
-        bus.resp.ready.eq(port.resp.ready),
+        port.resp.eq(bus.resp),
     ]
     return port
 
@@ -58,33 +55,20 @@ class SimpleFabric(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        cmd_readies = Signal(len(self.devices))
-        resp_valids = Signal(len(self.devices))
-        for (i, d) in enumerate(self.devices):
-            m.d.comb += [
-                cmd_readies[i].eq(d.cmd.ready),
-                resp_valids[i].eq(d.resp.valid),
-            ]
-
-        # registered; set when a previously addressed device needs to make a
+        # Registered; set when a previously addressed device needs to make a
         # response.
         expecting = Signal(1)
         # When expecting, this is the address of the device.
         expecting_id = Signal(self.extra_bits)
-        # Stop expecting if we see it happen.
-        with m.If(self.bus.resp.ready & self.bus.resp.valid):
+        # Stop expecting automatically after one cycle.
+        with m.If(expecting):
             m.d.sync += expecting.eq(0)
         # Record that we are expecting any time we see a load transaction.
-        with m.If(self.bus.cmd.ready & self.bus.cmd.valid &
-                  (self.bus.cmd.payload.lanes == 0)):
+        with m.If(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0)):
             m.d.sync += [
                 expecting.eq(1),
                 expecting_id.eq(self.bus.cmd.payload.addr[self.addr_bits:]),
             ]
-
-        # Set when we're not stalling.
-        ok = Signal(1)
-        m.d.comb += ok.eq(~expecting | (resp_valids >> expecting_id)[0])
 
         devid = Signal(self.extra_bits)
         m.d.comb += devid.eq(self.bus.cmd.payload.addr[self.addr_bits:])
@@ -96,34 +80,23 @@ class SimpleFabric(Elaboratable):
                 d.cmd.payload.data.eq(self.bus.cmd.payload.data),
                 d.cmd.payload.lanes.eq(self.bus.cmd.payload.lanes),
             ]
-            # Only propagate cmd valid to the specific addressed device, and
-            # don't propagate it if we're stalling.
+            # Only propagate cmd valid to the specific addressed device.
             dv = Signal(1, name = f"valid_{i}")
             m.d.comb += [
-                dv.eq(self.bus.cmd.valid & ok & (devid == i)),
+                dv.eq(self.bus.cmd.valid & (devid == i)),
                 d.cmd.valid.eq(dv),
             ]
-            # Only propagate response ready signal to the device we're expecting
-            # to hear from.
-            m.d.comb += d.resp.ready.eq(self.bus.resp.ready & expecting &
-                                        (expecting_id == i))
-
-        # Screen the command-ready signal based on the address bits and whether
-        # we're stalling.
-        m.d.comb += self.bus.cmd.ready.eq(ok & (cmd_readies >> devid)[0])
-        # Screen the response-valid signal similarly, but don't stall it.
-        m.d.comb += self.bus.resp.valid.eq((resp_valids >> devid)[0])
 
         # Fan the response data in based on who we're listening to.
         response_data = None
         for (i, d) in enumerate(self.devices):
-            data = d.resp.payload & (expecting & (expecting_id ==
+            data = d.resp & (expecting & (expecting_id ==
                                                   i)).replicate(self.data_bits)
             if response_data is None:
                 response_data = data
             else:
                 response_data = response_data | data
 
-        m.d.comb += self.bus.resp.payload.eq(response_data)
+        m.d.comb += self.bus.resp.eq(response_data)
 
         return m

@@ -27,19 +27,17 @@ class UState(Enum):
     RESET = 0 # TODO remove me
     FETCH = 1
     INST_REG1_LO = 2
-    FETCH_HI_WAIT = 3
-    REG2 = 4
-    OPERATE = 5
-    BRANCH = 6
-    LOAD = 7
-    LOAD_WAIT = 8
-    FILL_MSBS = 9
-    STORE = 10
-    SHIFT = 11
-    FINISH_SHIFT = 12
-    SLT = 13
-    CSR = 14
-    HALTED = 15
+    REG2 = 3
+    OPERATE = 4
+    BRANCH = 5
+    LOAD = 6
+    FILL_MSBS = 7
+    STORE = 8
+    SHIFT = 9
+    FINISH_SHIFT = 10
+    SLT = 11
+    HALTED = 12
+    CSR = 13
 
 class Opcode(Enum):
     LUI = 0b01101
@@ -346,8 +344,8 @@ class Cpu(Component):
                 m.d.comb += [
                     load_result[:8].eq(mux(
                         self.mar_lo[0],
-                        self.bus.resp.payload[8:],
-                        self.bus.resp.payload[:8],
+                        self.bus.resp[8:],
+                        self.bus.resp[:8],
                     )),
                     load_result[8:].eq(load_result[7].replicate(8)),
                 ]
@@ -355,13 +353,13 @@ class Cpu(Component):
                 m.d.comb += [
                     load_result[:8].eq(mux(
                         self.mar_lo[0],
-                        self.bus.resp.payload[8:],
-                        self.bus.resp.payload[:8],
+                        self.bus.resp[8:],
+                        self.bus.resp[:8],
                     )),
                     load_result[8:].eq(0),
                 ]
             with m.Default(): # LH, LW, LHU
-                m.d.comb += load_result.eq(self.bus.resp.payload)
+                m.d.comb += load_result.eq(self.bus.resp)
         store_data = Signal(16)
         with m.Switch(self.inst[12:15]):
             with m.Case(0b000): # SB
@@ -419,19 +417,17 @@ class Cpu(Component):
             with m.Case(UState.FETCH):
                 m.d.comb += [
                     self.bus.cmd.payload.addr.eq(pc31_plus_hi),
-
-                    self.bus.resp.ready.eq(self.hi),
                 ]
                 m.d.sync += saved_zero.eq(1)
                 m.d.sync += saved_carry.eq(0)
-                m.d.sync += self.inst[:16].eq(self.bus.resp.payload)
+                m.d.sync += self.inst[:16].eq(self.bus.resp)
                 # This logic is a little subtle, but
-                # - We flip this flag on the low half if the bus is ready
-                #   because bus.cmd.valid is fixed high.
-                # - We flip this on the high half if the bus is ready and an
-                #   incoming transaction has appeared, because the latter gates our
-                #   assertion of bus.cmd.valid.
-                with m.If(self.bus.cmd.valid & self.bus.cmd.ready):
+                # - We flip this flag on the low half because bus.cmd.valid is
+                #   fixed high.
+                # - We flip this on the high half if an incoming transaction has
+                #   appeared, because the latter gates our assertion of
+                #   bus.cmd.valid.
+                with m.If(self.bus.cmd.valid):
                     m.d.sync += self.hi.eq(~self.hi)
 
                 with m.If(~self.hi):
@@ -480,62 +476,29 @@ class Cpu(Component):
                         m.d.sync += self.ustate.eq(UState.HALTED)
                 with m.Else():
                     # Forward the fetch completion to the valid signal.
-                    m.d.comb += self.bus.cmd.valid.eq(self.bus.resp.valid)
+                    m.d.comb += self.bus.cmd.valid.eq(1)
 
-                    # If the low half of the fetch has completed...
-                    with m.If(self.bus.resp.valid):
-                        # And the bus is ready to accept our request for the
-                        # high half...
-                        with m.If(self.bus.cmd.ready):
-                            # ...then we can move on
-                            m.d.sync += self.ustate.eq(UState.INST_REG1_LO)
-                        with m.Else():
-                            # fetch-lo completed but fetch-hi has not been able
-                            # to issue. We've written the result to inst[:16]
-                            # above but can't transition to INST_REG1_LO until
-                            # we issue fetch-hi.
-                            m.d.sync += self.ustate.eq(UState.FETCH_HI_WAIT)
-
-            # State entered when we were able to complete the low half of a
-            # fetch, but were not able to issue the high half.
-            #
-            # Only entered with hi==1
-            with m.Case(UState.FETCH_HI_WAIT):
-                # Keep trying to issue the high half
-                m.d.comb += [
-                    self.bus.cmd.payload.addr.eq(pc31_plus_hi),
-                    self.bus.cmd.valid.eq(1),
-                ]
-
-                with m.If(self.bus.cmd.ready):
-                    # fetch-hi has issued, we can move on to...
+                    # Move on to the high half.
                     m.d.sync += self.ustate.eq(UState.INST_REG1_LO)
-                    m.d.sync += self.hi.eq(~self.hi)
 
             # Latching the high half of the instruction and starting the read
             # for rs1 low half.
             #
             # Only entered with hi==0
             with m.Case(UState.INST_REG1_LO):
-                m.d.comb += self.bus.resp.ready.eq(1)
-                with m.If(self.bus.resp.valid):
-                    # Hi half fetch is completing!
-                    m.d.sync += self.inst[16:].eq(self.bus.resp.payload)
-                    # Set up a read of the low half of the first operand
-                    # register, optimistically, using the not-yet-latched rs1
-                    # select bits coming in from the bus.
-                    m.d.comb += [
-                        rf.read_cmd.valid.eq(1),
-                        rf.read_cmd.payload.eq(
-                            Cat(self.inst[15], self.bus.resp.payload[0:4], self.ctx),
-                        ),
-                    ]
+                # Hi half fetch is completing!
+                m.d.sync += self.inst[16:].eq(self.bus.resp)
+                # Set up a read of the low half of the first operand
+                # register, optimistically, using the not-yet-latched rs1
+                # select bits coming in from the bus.
+                m.d.comb += [
+                    rf.read_cmd.valid.eq(1),
+                    rf.read_cmd.payload.eq(
+                        Cat(self.inst[15], self.bus.resp[0:4], self.ctx),
+                    ),
+                ]
 
-                    m.d.sync += self.ustate.eq(UState.REG2)
-                with m.Else():
-                    # We're waiting on the bus to finish the fetch before we can
-                    # do anything.
-                    pass
+                m.d.sync += self.ustate.eq(UState.REG2)
 
             # Latching half of rs1 and starting the read of the corresponding
             # half of rs2, with some overrides below.
@@ -700,7 +663,7 @@ class Cpu(Component):
                         (is_auipc_or_lui | is_alu | is_xpc | is_flip, pc_plus_4),
                         (is_jal_or_jalr, Cat(self.shadow_pc, adder_result)),
                         (is_store, mux(
-                            self.bus.cmd.ready & funct3_is[0b010],
+                            funct3_is[0b010],
                             self.pc[self.ctx],
                             pc_plus_4,
                         )),
@@ -730,19 +693,11 @@ class Cpu(Component):
                         (is_auipc_or_lui_or_jal | is_jalr | is_mret, UState.FETCH),
                         (is_b, UState.BRANCH),
                         (is_csr, UState.CSR),
-                        (is_load, mux(
-                            self.bus.cmd.ready,
-                            UState.LOAD,
-                            self.ustate,
-                        )),
+                        (is_load, UState.LOAD),
                         (is_store, mux(
-                            self.bus.cmd.ready,
-                            mux(
-                                funct3_is[0b010],
-                                UState.STORE,
-                                UState.FETCH,
-                            ),
-                            self.ustate,
+                            funct3_is[0b010],
+                            UState.STORE,
+                            UState.FETCH,
                         )),
                         (is_alu, onehot_choice(funct3_is, {
                             0b000: UState.FETCH,
@@ -811,60 +766,40 @@ class Cpu(Component):
 
             with m.Case(UState.LOAD):
                 m.d.comb += [
-                    self.bus.resp.ready.eq(1),
-
                     # Set up the write of the halfword...
                     rf.write_cmd.payload.reg.eq(Cat(self.inst[7:12], self.hi)),
                     rf.write_cmd.payload.value.eq(load_result),
-                    # ...but only commit it if the data's actually here.
-                    rf.write_cmd.valid.eq(self.bus.resp.valid),
+                    rf.write_cmd.valid.eq(1),
                     self.bus.cmd.payload.addr.eq(
                         Cat(self.mar_lo, adder_result)[1:] | 1,
                     ),
                 ]
 
-                with m.If(self.bus.resp.valid):
-                    m.d.sync += [
-                        self.hi.eq(~self.hi),
+                m.d.sync += [
+                    self.hi.eq(~self.hi),
 
-                        self.accum.eq(mux(
-                            funct3_is[0b000] | funct3_is[0b001],
-                            load_result[15].replicate(16),
-                            0,
-                        )),
-                    ]
-
-                    with m.If(~self.hi):
-                        with m.Switch(self.inst[12:15]):
-                            with m.Case(0b000, 0b001): # LB, LH
-                                m.d.sync += self.ustate.eq(UState.FILL_MSBS)
-                            with m.Case(0b010): # LW
-                                # Address the next halfword
-                                m.d.comb += self.bus.cmd.valid.eq(1)
-                                with m.If(self.bus.cmd.ready):
-                                    m.d.sync += self.ustate.eq(UState.LOAD)
-                                with m.Else():
-                                    m.d.sync += self.ustate.eq(UState.LOAD_WAIT)
-                            with m.Case(0b100, 0b101): # LBU, LHU
-                                m.d.sync += self.ustate.eq(UState.FILL_MSBS)
-                    with m.Else():
-                        m.d.sync += [
-                            self.pc[self.ctx].eq(pc_plus_4),
-                            self.ustate.eq(UState.FETCH),
-                        ]
-
-            with m.Case(UState.LOAD_WAIT):
-                # Address the next halfword
-                m.d.comb += [
-                    self.bus.cmd.valid.eq(1),
-                    self.bus.cmd.payload.addr.eq(
-                        Cat(self.mar_lo, adder_result)[1:] | 1,
-                    ),
+                    self.accum.eq(mux(
+                        funct3_is[0b000] | funct3_is[0b001],
+                        load_result[15].replicate(16),
+                        0,
+                    )),
                 ]
-                with m.If(self.bus.cmd.ready):
-                    m.d.sync += self.ustate.eq(UState.LOAD_WAIT)
+
+                with m.If(~self.hi):
+                    with m.Switch(self.inst[12:15]):
+                        with m.Case(0b000, 0b001): # LB, LH
+                            m.d.sync += self.ustate.eq(UState.FILL_MSBS)
+                        with m.Case(0b010): # LW
+                            # Address the next halfword
+                            m.d.comb += self.bus.cmd.valid.eq(1)
+                            m.d.sync += self.ustate.eq(UState.LOAD)
+                        with m.Case(0b100, 0b101): # LBU, LHU
+                            m.d.sync += self.ustate.eq(UState.FILL_MSBS)
                 with m.Else():
-                    m.d.sync += self.ustate.eq(UState.LOAD)
+                    m.d.sync += [
+                        self.pc[self.ctx].eq(pc_plus_4),
+                        self.ustate.eq(UState.FETCH),
+                    ]
 
             with m.Case(UState.STORE):
                 # Write the high half of rs2 (which has just arrived on the
@@ -877,11 +812,10 @@ class Cpu(Component):
                     self.bus.cmd.payload.data.eq(store_data),
                     self.bus.cmd.payload.lanes.eq(store_mask),
                 ]
-                with m.If(self.bus.cmd.ready):
-                    m.d.sync += [
-                        self.pc[self.ctx].eq(pc_plus_4),
-                        self.ustate.eq(UState.FETCH),
-                    ]
+                m.d.sync += [
+                    self.pc[self.ctx].eq(pc_plus_4),
+                    self.ustate.eq(UState.FETCH),
+                ]
 
             with m.Case(UState.FILL_MSBS):
                 m.d.comb += [

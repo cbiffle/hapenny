@@ -7,10 +7,10 @@ from amaranth.lib.enum import *
 from hapenny import StreamSig, AlwaysReady
 
 class RegFile16(Component):
-    read_cmd: In(StreamSig(7))
+    read_cmd: In(AlwaysReady(7))
     read_resp: Out(16)
 
-    write_cmd: In(StreamSig(Signature({
+    write_cmd: In(AlwaysReady(Signature({
         'reg': Out(7),
         'value': Out(16),
     })))
