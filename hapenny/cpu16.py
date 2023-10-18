@@ -6,6 +6,7 @@ from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
 from hapenny import StreamSig, AlwaysReady, csr16, mux, oneof, onehot_choice
+from hapenny.decoder import ImmediateDecoder
 from hapenny.regfile16 import RegFile16
 from hapenny.bus import BusPort
 from hapenny.csr16 import CsrFile16, CsrReg
@@ -250,21 +251,8 @@ class Cpu(Component):
             m.d.comb += inst_rs2_ctx.eq(self.ctx)
 
         # Immediate encodings
-        imm_i = Signal(32)
-        imm_s = Signal(32)
-        imm_b = Signal(32)
-        imm_u = Signal(32)
-        imm_j = Signal(32)
-        m.d.comb += [
-            imm_i.eq(Cat(self.inst[20:31], self.inst[31].replicate(21))),
-            imm_s.eq(Cat(self.inst[7:12], self.inst[25:31],
-                         self.inst[31].replicate(21))),
-            imm_b.eq(Cat(0, self.inst[8:12], self.inst[25:31], self.inst[7],
-                     self.inst[31].replicate(20))),
-            imm_u.eq(self.inst & 0xFFFFF000),
-            imm_j.eq(Cat(0, self.inst[21:31], self.inst[20],
-                         self.inst[12:20], self.inst[31].replicate(12))),
-        ]
+        m.submodules.imm = imm = ImmediateDecoder()
+        m.d.comb += imm.inst.eq(self.inst)
 
         m.d.comb += [
             self.halted.eq(self.ustate == UState.HALTED),
@@ -288,30 +276,30 @@ class Cpu(Component):
         m.d.comb += adder_rhs.eq(oneof([
             (is_auipc_or_lui, mux(
                 self.hi,
-                imm_u[16:],
-                imm_u[:16],
+                imm.u[16:],
+                imm.u[:16],
             )),
             (is_jal, mux(
                 self.hi,
-                imm_j[16:],
-                imm_j[:16],
+                imm.j[16:],
+                imm.j[:16],
             )),
             (is_neg_reg_to_adder, ~rf.read_resp),
             (is_imm_i, mux(
                 self.hi,
-                imm_i[16:],
-                imm_i[:16],
+                imm.i[16:],
+                imm.i[:16],
             )),
             (is_store, mux(
                 self.hi,
-                imm_s[16:],
-                imm_s[:16],
+                imm.s[16:],
+                imm.s[:16],
             )),
             (is_reg_to_adder, rf.read_resp ^ self.inst[30].replicate(16)),
             (is_neg_imm_i, mux(
                 self.hi,
-                ~imm_i[16:],
-                ~imm_i[:16],
+                ~imm.i[16:],
+                ~imm.i[:16],
             )),
         ]))
 
@@ -395,7 +383,7 @@ class Cpu(Component):
                     (~self.inst[14], self.accum),
                 ])),
                 csr_file.cmd.payload.high.eq(self.hi),
-                csr_file.cmd.payload.addr.eq(imm_i),
+                csr_file.cmd.payload.addr.eq(imm.i),
                 csr_file.cmd.payload.mode.eq(
                     mux(
                         # Write phase occurs for CSRRW(I) or any RS/RC
@@ -735,8 +723,8 @@ class Cpu(Component):
                 m.d.comb += [
                     adder_rhs.eq(mux(
                         self.hi,
-                        imm_b[16:],
-                        imm_b[:16],
+                        imm.b[16:],
+                        imm.b[:16],
                     )),
                     adder_carry_in.eq(saved_carry & self.hi),
                 ]
