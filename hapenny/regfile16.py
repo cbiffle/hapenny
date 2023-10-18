@@ -6,14 +6,16 @@ from amaranth.lib.enum import *
 
 from hapenny import StreamSig, AlwaysReady
 
+RegWrite = Signature({
+    'reg': Out(7),
+    'value': Out(16),
+})
+
 class RegFile16(Component):
     read_cmd: In(AlwaysReady(7))
     read_resp: Out(16)
 
-    write_cmd: In(AlwaysReady(Signature({
-        'reg': Out(7),
-        'value': Out(16),
-    })))
+    write_cmd: In(AlwaysReady(RegWrite))
 
     def __init__(self, *, rv32e = False):
         super().__init__()
