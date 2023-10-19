@@ -452,24 +452,11 @@ class Cpu(Component):
                 # Adder configuration
 
                 # Carry input:
-                m.d.comb += adder_carry_in.eq(oneof([
-                    (dec.is_b, saved_carry | ~self.hi),
-                    (dec.is_alu_ri, mux(
-                        funct3_is[0b010] | funct3_is[0b011], # SLTs
-                        saved_carry | ~self.hi,
-                        saved_carry,
-                    )),
-                    (dec.is_alu_rr, mux(
-                        funct3_is[0b010] | funct3_is[0b011], # SLTs
-                        saved_carry | ~self.hi,
-                        mux(
-                            self.hi,
-                            saved_carry,
-                            self.inst[30],
-                        ),
-                    )),
-                    (dec.is_auipc_or_lui_or_jal | dec.is_load_or_jalr | dec.is_store | is_xpc,
-                     saved_carry),
+                m.d.comb += adder_carry_in.eq(saved_carry | oneof([
+                    (dec.is_b, ~self.hi),
+                    (dec.is_alu & (funct3_is[0b010] | funct3_is[0b011]), # SLTs
+                         ~self.hi),
+                    (dec.is_alu_rr & self.inst[30], ~self.hi),
                 ]))
 
                 # Register write behavior
@@ -492,8 +479,7 @@ class Cpu(Component):
                     )),
                     (dec.is_alu, onehot_choice(funct3_is, {
                         0b000: adder_result,
-                        0b010: 0, # important for SLT step
-                        0b011: 0, # important for SLT step
+                        # SLTs producing zero here is important for SLT step.
                         0b100: self.accum ^ adder_rhs,
                         0b110: self.accum | adder_rhs,
                         0b111: self.accum & adder_rhs,
@@ -511,9 +497,8 @@ class Cpu(Component):
                 # Register read for next cycle
 
                 m.d.comb += rf.read_cmd.valid.eq(oneof([
-                    (dec.is_jalr | dec.is_b | dec.is_alu | dec.is_store | is_xpc, 1),
                     (dec.is_load, ~self.hi),
-                ]))
+                ], default = 1))
                 m.d.comb += rf.read_cmd.payload.eq(mux(
                     dec.is_store & self.hi,
                     Cat(inst_rs2, 1, inst_rs2_ctx),
@@ -545,7 +530,6 @@ class Cpu(Component):
 
                 m.d.sync += self.accum.eq(oneof([
                     (dec.is_auipc_or_jal, self.pc[self.ctx][15:]),
-                    (dec.is_lui, 0),
                     (dec.is_b, Cat(0, self.pc[self.ctx][:15])),
                     (dec.is_alu, self.accum),
                 ]))
@@ -575,8 +559,7 @@ class Cpu(Component):
                             self.pc[self.ctx],
                             pc_plus_4,
                         )),
-                        (dec.is_load | dec.is_b | dec.is_csr, self.pc[self.ctx]),
-                    ]))
+                    ], default = self.pc[self.ctx]))
                     m.d.sync += self.ctx.eq(self.ctx ^ is_flip)
 
                 # Updates that only occur during low phase:
@@ -592,34 +575,23 @@ class Cpu(Component):
 
                 m.d.sync += self.ustate.eq(mux(
                     ~self.hi,
+                    mux(
+                        dec.is_auipc_or_lui_or_jal | is_xpc | is_flip,
+                        UState.OPERATE,
+                        UState.REG2,
+                    ),
                     oneof([
-                        (dec.is_auipc_or_lui_or_jal | is_xpc | is_flip, UState.OPERATE),
-                        (dec.is_b | dec.is_load_or_jalr | dec.is_store |
-                         dec.is_alu | dec.is_csr |
-                         is_mret, UState.REG2),
-                    ]),
-                    oneof([
-                        (dec.is_auipc_or_lui_or_jal | dec.is_jalr | is_mret, UState.FETCH),
                         (dec.is_b, UState.BRANCH),
                         (dec.is_csr, UState.CSR),
                         (dec.is_load, UState.LOAD),
-                        (dec.is_store, mux(
-                            funct3_is[0b010],
-                            UState.STORE,
-                            UState.FETCH,
-                        )),
+                        (dec.is_store & funct3_is[0b010], UState.STORE),
                         (dec.is_alu, onehot_choice(funct3_is, {
-                            0b000: UState.FETCH,
                             0b001: UState.SHIFT,
                             0b010: UState.SLT,
                             0b011: UState.SLT,
-                            0b100: UState.FETCH,
                             0b101: UState.SHIFT,
-                            0b110: UState.FETCH,
-                            0b111: UState.FETCH,
-                        })),
-                        (is_flip | is_xpc, UState.FETCH),
-                    ]),
+                        }, default = UState.FETCH)),
+                    ], default = UState.FETCH),
                 ))
                 m.d.sync += self.hi.eq(mux(
                     dec.is_alu & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
