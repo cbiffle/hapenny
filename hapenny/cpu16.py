@@ -5,7 +5,7 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 import amaranth.lib.coding
 
-from hapenny import StreamSig, AlwaysReady, csr16, mux, oneof, onehot_choice
+from hapenny import StreamSig, AlwaysReady, csr16, mux, oneof, onehot_choice, lohalf, hihalf, choosehalf
 from hapenny.decoder import ImmediateDecoder, Decoder, DecodeSignals
 from hapenny.regfile16 import RegFile16
 from hapenny.bus import BusPort
@@ -214,33 +214,13 @@ class Cpu(Component):
             zero_out.eq(saved_zero & (adder_result == 0)),
         ]
         m.d.comb += adder_rhs.eq(oneof([
-            (dec.is_auipc_or_lui, mux(
-                self.hi,
-                imm.u[16:],
-                imm.u[:16],
-            )),
-            (dec.is_jal, mux(
-                self.hi,
-                imm.j[16:],
-                imm.j[:16],
-            )),
+            (dec.is_auipc_or_lui, choosehalf(self.hi, imm.u)),
+            (dec.is_jal, choosehalf(self.hi, imm.j)),
             (dec.is_neg_reg_to_adder, ~rf.read_resp),
-            (dec.is_imm_i, mux(
-                self.hi,
-                imm.i[16:],
-                imm.i[:16],
-            )),
-            (dec.is_store, mux(
-                self.hi,
-                imm.s[16:],
-                imm.s[:16],
-            )),
+            (dec.is_imm_i, choosehalf(self.hi, imm.i)),
+            (dec.is_store, choosehalf(self.hi, imm.s)),
             (dec.is_reg_to_adder, rf.read_resp ^ self.inst[30].replicate(16)),
-            (dec.is_neg_imm_i, mux(
-                self.hi,
-                ~imm.i[16:],
-                ~imm.i[:16],
-            )),
+            (dec.is_neg_imm_i, choosehalf(self.hi, ~imm.i)),
         ]))
 
         signed_less_than = Signal(1)
@@ -348,7 +328,7 @@ class Cpu(Component):
                 ]
                 m.d.sync += saved_zero.eq(1)
                 m.d.sync += saved_carry.eq(0)
-                m.d.sync += self.inst[:16].eq(self.bus.resp)
+                m.d.sync += lohalf(self.inst).eq(self.bus.resp)
                 # This logic is a little subtle, but
                 # - We flip this flag on the low half because bus.cmd.valid is
                 #   fixed high.
@@ -415,7 +395,7 @@ class Cpu(Component):
             # Only entered with hi==0
             with m.Case(UState.INST_REG1_LO):
                 # Hi half fetch is completing!
-                m.d.sync += self.inst[16:].eq(self.bus.resp)
+                m.d.sync += hihalf(self.inst).eq(self.bus.resp)
                 # Set up a read of the low half of the first operand
                 # register, optimistically, using the not-yet-latched rs1
                 # select bits coming in from the bus.
@@ -662,11 +642,7 @@ class Cpu(Component):
 
             with m.Case(UState.BRANCH):
                 m.d.comb += [
-                    adder_rhs.eq(mux(
-                        self.hi,
-                        imm.b[16:],
-                        imm.b[:16],
-                    )),
+                    adder_rhs.eq(choosehalf(self.hi, imm.b)),
                     adder_carry_in.eq(saved_carry & self.hi),
                 ]
                 m.d.sync += [

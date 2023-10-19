@@ -75,20 +75,45 @@ def onehot_choice(onehot_sig, options):
 #
 # If you've got a onehot control signal instead of a bunch of separate condition
 # strobes, see onehot_choice.
-def oneof(options):
+def oneof(options, default = None):
     assert len(options) > 0
     output = None
+    any_match = None
     for (condition, result) in options:
+        if isinstance(condition, int):
+            condition = Const(result)
         if isinstance(result, Enum):
             result = result.value
         if isinstance(result, int):
             result = Const(result)
+        
+        if any_match is not None:
+            any_match = any_match | condition.any()
+        else:
+            any_match = condition.any()
+
         case = condition.any().replicate(result.shape().width) & result
+
         if output is not None:
             output = output | case
         else:
             output = case
 
+    if default is not None:
+        no_match = ~any_match
+        output = output | (no_match.replicate(default.shape().width) & default)
+
     return output
+
+def hihalf(signal):
+    return signal[16:]
+
+def lohalf(signal):
+    return signal[:16]
+
+# Selects between the halfwords of (32-bit) signal: if hi is 1, chooses the
+# high half, otherwise the low half.
+def choosehalf(hi, signal):
+    return mux(hi, hihalf(signal), lohalf(signal))
 
 
