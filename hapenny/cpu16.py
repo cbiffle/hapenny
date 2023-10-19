@@ -3,10 +3,10 @@
 from amaranth import *
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
-from amaranth.lib.coding import Encoder, Decoder
+import amaranth.lib.coding
 
 from hapenny import StreamSig, AlwaysReady, csr16, mux, oneof, onehot_choice
-from hapenny.decoder import ImmediateDecoder
+from hapenny.decoder import ImmediateDecoder, Decoder, DecodeSignals
 from hapenny.regfile16 import RegFile16
 from hapenny.bus import BusPort
 from hapenny.csr16 import CsrFile16, CsrReg
@@ -101,6 +101,16 @@ class Cpu(Component):
 
         m.submodules.regfile = rf = RegFile16()
 
+        m.submodules.imm = imm = ImmediateDecoder()
+        m.d.comb += imm.inst.eq(self.inst)
+
+        m.submodules.dec = Decoder()
+        m.d.comb += m.submodules.dec.inst.eq(self.inst)
+        # Register the decode signals. This breaks the critical path through the
+        # decoder to various control signals.
+        dec = Signal(DecodeSignals)
+        m.d.sync += dec.eq(m.submodules.dec.out)
+
         if self.has_interrupt == "m":
             m.submodules.mstatus = mstatus = CsrReg(
                 name = "mstatus",
@@ -141,37 +151,9 @@ class Cpu(Component):
 
         # Instruction decode strobes. These are all registered and are available
         # one cycle after the inst contents are latched.
-        is_auipc = Signal(1)
-        is_lui = Signal(1)
-        is_jal = Signal(1)
-        is_jalr = Signal(1)
-        is_b = Signal(1)
-        is_load = Signal(1)
-        is_store = Signal(1)
-        is_alu_rr = Signal(1)
-        is_alu_ri = Signal(1)
-        is_system = Signal(1)
-        is_csr = Signal(1)
         is_mret = Signal(1)
-        is_custom0 = Signal(1)
         is_flip = Signal(1)
         is_xpc = Signal(1)
-
-        # Instruction group decode strobes. Also registered. These are basically
-        # manual retiming of the instruction comparison logic, because my tools
-        # are limited.
-        is_auipc_or_lui = Signal(1)
-        is_auipc_or_lui_or_jal = Signal(1)
-        is_auipc_or_jal = Signal(1)
-        is_jal_or_jalr = Signal(1)
-        is_load_or_jalr = Signal(1)
-        is_alu = Signal(1)
-
-        # Immediate/operand decode strobes.
-        is_imm_i = Signal(1)
-        is_neg_imm_i = Signal(1)
-        is_neg_reg_to_adder = Signal(1)
-        is_reg_to_adder = Signal(1)
 
         m.d.comb += [
             opcode.eq(self.inst[2:7]),
@@ -180,56 +162,17 @@ class Cpu(Component):
             inst_rs2.eq(self.inst[20:25]),
         ]
 
-        m.submodules.funct3_is = Decoder(8)
+        m.submodules.funct3_is = amaranth.lib.coding.Decoder(8)
         funct3_is = Signal(8)
         m.d.comb += [
             m.submodules.funct3_is.i.eq(self.inst[12:15]),
             funct3_is.eq(m.submodules.funct3_is.o),
         ]
 
-        m.d.sync += [
-            is_auipc.eq(opcode == Opcode.AUIPC),
-            is_lui.eq(opcode == Opcode.LUI),
-            is_auipc_or_lui.eq((opcode == Opcode.LUI) | (opcode == Opcode.AUIPC)),
-            is_auipc_or_lui_or_jal.eq((opcode == Opcode.LUI)
-                                      | (opcode == Opcode.AUIPC)
-                                      | (opcode == Opcode.JAL)),
-            is_jal.eq(opcode == Opcode.JAL),
-            is_auipc_or_jal.eq((opcode == Opcode.AUIPC) | (opcode ==
-                                                           Opcode.JAL)),
-            is_store.eq(opcode == Opcode.Sxx),
-            is_jalr.eq(opcode == Opcode.JALR),
-            is_jal_or_jalr.eq((opcode == Opcode.JAL) | (opcode == Opcode.JALR)),
-            is_b.eq(opcode == Opcode.Bxx),
-            is_load.eq(opcode == Opcode.Lxx),
-            is_load_or_jalr.eq((opcode == Opcode.Lxx) | (opcode == Opcode.JALR)),
-            is_alu_rr.eq(opcode == Opcode.ALUREG),
-            is_alu_ri.eq(opcode == Opcode.ALUIMM),
-            is_alu.eq((opcode == Opcode.ALUREG) | (opcode == Opcode.ALUIMM)),
-            is_system.eq(opcode == Opcode.SYSTEM),
-            is_custom0.eq(opcode == Opcode.CUSTOM0),
-
-            is_imm_i.eq(
-                (opcode == Opcode.Lxx) | (opcode == Opcode.JALR)
-                | ((opcode == Opcode.ALUIMM) & ~(funct3_is[0b010] | funct3_is[0b011]))
-                | (opcode == Opcode.CUSTOM0)
-            ),
-            is_neg_imm_i.eq(
-                (opcode == Opcode.ALUIMM) & (funct3_is[0b010] | funct3_is[0b011])
-            ),
-            is_neg_reg_to_adder.eq(
-                (opcode == Opcode.Bxx)
-                | ((opcode == Opcode.ALUREG) & (funct3_is[0b010] | funct3_is[0b011]))
-            ),
-            is_reg_to_adder.eq(
-                ((opcode == Opcode.ALUREG) & ~(funct3_is[0b010] | funct3_is[0b011]))
-            ),
-        ]
         # Only implement decode logic for these instructions if necessary, to
         # save area in the baseline implementation.
         if self.has_interrupt == "m":
             m.d.sync += [
-                is_csr.eq((opcode == Opcode.SYSTEM) & ~funct3_is[0b000]),
                 is_mret.eq((opcode == Opcode.SYSTEM) & funct3_is[0b000]
                            & (self.inst[25:] == 0b0011000)),
             ]
@@ -243,16 +186,13 @@ class Cpu(Component):
         inst_rs2_ctx = Signal(1)
         if self.has_interrupt == 'fast':
             m.d.comb += [
-                inst_rd_ctx.eq((is_alu_rr & self.inst[29]) ^ self.ctx),
-                inst_rs2_ctx.eq((is_alu_rr & self.inst[27]) ^ self.ctx),
+                inst_rd_ctx.eq((dec.is_alu_rr & self.inst[29]) ^ self.ctx),
+                inst_rs2_ctx.eq((dec.is_alu_rr & self.inst[27]) ^ self.ctx),
             ]
         else:
             m.d.comb += inst_rd_ctx.eq(self.ctx)
             m.d.comb += inst_rs2_ctx.eq(self.ctx)
 
-        # Immediate encodings
-        m.submodules.imm = imm = ImmediateDecoder()
-        m.d.comb += imm.inst.eq(self.inst)
 
         m.d.comb += [
             self.halted.eq(self.ustate == UState.HALTED),
@@ -274,29 +214,29 @@ class Cpu(Component):
             zero_out.eq(saved_zero & (adder_result == 0)),
         ]
         m.d.comb += adder_rhs.eq(oneof([
-            (is_auipc_or_lui, mux(
+            (dec.is_auipc_or_lui, mux(
                 self.hi,
                 imm.u[16:],
                 imm.u[:16],
             )),
-            (is_jal, mux(
+            (dec.is_jal, mux(
                 self.hi,
                 imm.j[16:],
                 imm.j[:16],
             )),
-            (is_neg_reg_to_adder, ~rf.read_resp),
-            (is_imm_i, mux(
+            (dec.is_neg_reg_to_adder, ~rf.read_resp),
+            (dec.is_imm_i, mux(
                 self.hi,
                 imm.i[16:],
                 imm.i[:16],
             )),
-            (is_store, mux(
+            (dec.is_store, mux(
                 self.hi,
                 imm.s[16:],
                 imm.s[:16],
             )),
-            (is_reg_to_adder, rf.read_resp ^ self.inst[30].replicate(16)),
-            (is_neg_imm_i, mux(
+            (dec.is_reg_to_adder, rf.read_resp ^ self.inst[30].replicate(16)),
+            (dec.is_neg_imm_i, mux(
                 self.hi,
                 ~imm.i[16:],
                 ~imm.i[:16],
@@ -495,14 +435,14 @@ class Cpu(Component):
             with m.Case(UState.REG2):
                 # rs1 (hi/lo) is now available on the register file output
                 # port. Latch it into the accumulator.
-                with m.If(is_auipc_or_jal):
+                with m.If(dec.is_auipc_or_jal):
                     # Load program counter instead.
                     m.d.sync += self.accum.eq(mux(
                         self.hi,
                         self.pc[self.ctx][15:],
                         Cat(0, self.pc[self.ctx][:15]),
                     ))
-                with m.Elif(is_lui):
+                with m.Elif(dec.is_lui):
                     m.d.sync += self.accum.eq(0)
                 with m.Else():
                     m.d.sync += self.accum.eq(rf.read_resp)
@@ -514,7 +454,7 @@ class Cpu(Component):
                     rf.read_cmd.valid.eq(1),
                     rf.read_cmd.payload.eq(Cat(
                         inst_rs2,
-                        self.hi & ~is_store,
+                        self.hi & ~dec.is_store,
                         inst_rs2_ctx,
                     )),
                 ]
@@ -533,13 +473,13 @@ class Cpu(Component):
 
                 # Carry input:
                 m.d.comb += adder_carry_in.eq(oneof([
-                    (is_b, saved_carry | ~self.hi),
-                    (is_alu_ri, mux(
+                    (dec.is_b, saved_carry | ~self.hi),
+                    (dec.is_alu_ri, mux(
                         funct3_is[0b010] | funct3_is[0b011], # SLTs
                         saved_carry | ~self.hi,
                         saved_carry,
                     )),
-                    (is_alu_rr, mux(
+                    (dec.is_alu_rr, mux(
                         funct3_is[0b010] | funct3_is[0b011], # SLTs
                         saved_carry | ~self.hi,
                         mux(
@@ -548,7 +488,7 @@ class Cpu(Component):
                             self.inst[30],
                         ),
                     )),
-                    (is_auipc_or_lui_or_jal | is_load_or_jalr | is_store | is_xpc,
+                    (dec.is_auipc_or_lui_or_jal | dec.is_load_or_jalr | dec.is_store | is_xpc,
                      saved_carry),
                 ]))
 
@@ -556,21 +496,21 @@ class Cpu(Component):
 
                 # Instructions that write a register:
                 m.d.comb += rf.write_cmd.valid.eq(
-                    is_auipc_or_lui_or_jal | is_jalr | is_alu
-                    | (is_csr & self.hi)  # CSR writes high side first
+                    dec.is_auipc_or_lui_or_jal | dec.is_jalr | dec.is_alu
+                    | (dec.is_csr & self.hi)  # CSR writes high side first
                     | is_xpc
                 )
                 # Register being written
                 m.d.comb += rf.write_cmd.payload.reg.eq(Cat(inst_rd, self.hi, inst_rd_ctx))
                 # Value written to a register:
                 m.d.comb += rf.write_cmd.payload.value.eq(oneof([
-                    (is_auipc_or_lui, adder_result),
-                    (is_jal_or_jalr, mux(
+                    (dec.is_auipc_or_lui, adder_result),
+                    (dec.is_jal_or_jalr, mux(
                         self.hi,
                         pc_plus_4[15:],
                         Cat(0, pc_plus_4[:15]),
                     )),
-                    (is_alu, onehot_choice(funct3_is, {
+                    (dec.is_alu, onehot_choice(funct3_is, {
                         0b000: adder_result,
                         0b010: 0, # important for SLT step
                         0b011: 0, # important for SLT step
@@ -578,7 +518,7 @@ class Cpu(Component):
                         0b110: self.accum | adder_rhs,
                         0b111: self.accum & adder_rhs,
                     })),
-                    (is_csr,
+                    (dec.is_csr,
                      csr_file.cmd.payload.read \
                              if self.has_interrupt == "m" else 0),
                     (is_xpc, mux(
@@ -591,14 +531,14 @@ class Cpu(Component):
                 # Register read for next cycle
 
                 m.d.comb += rf.read_cmd.valid.eq(oneof([
-                    (is_jalr | is_b | is_alu | is_store | is_xpc, 1),
-                    (is_load, ~self.hi),
+                    (dec.is_jalr | dec.is_b | dec.is_alu | dec.is_store | is_xpc, 1),
+                    (dec.is_load, ~self.hi),
                 ]))
                 m.d.comb += rf.read_cmd.payload.eq(mux(
-                    is_store & self.hi,
+                    dec.is_store & self.hi,
                     Cat(inst_rs2, 1, inst_rs2_ctx),
                     mux(
-                        is_alu,
+                        dec.is_alu,
                         Cat(inst_rs1, ~self.hi, self.ctx),
                         Cat(inst_rs1, 1, self.ctx),
                     ),
@@ -611,23 +551,23 @@ class Cpu(Component):
                 )
                 m.d.comb += self.bus.cmd.payload.data.eq(store_data)
                 m.d.comb += self.bus.cmd.payload.lanes.eq(oneof([
-                    (is_store & self.hi, store_mask),
+                    (dec.is_store & self.hi, store_mask),
                 ]))
                 m.d.comb += self.bus.cmd.valid.eq(oneof([
-                    (is_load | is_store, self.hi),
+                    (dec.is_load | dec.is_store, self.hi),
                 ]))
 
                 if self.has_interrupt == "m":
                     # CSR port driving
-                    m.d.comb += csr_file.cmd.valid.eq(is_csr)
+                    m.d.comb += csr_file.cmd.valid.eq(dec.is_csr)
 
                 # Assorted register update rules
 
                 m.d.sync += self.accum.eq(oneof([
-                    (is_auipc_or_jal, self.pc[self.ctx][15:]),
-                    (is_lui, 0),
-                    (is_b, Cat(0, self.pc[self.ctx][:15])),
-                    (is_alu, self.accum),
+                    (dec.is_auipc_or_jal, self.pc[self.ctx][15:]),
+                    (dec.is_lui, 0),
+                    (dec.is_b, Cat(0, self.pc[self.ctx][:15])),
+                    (dec.is_alu, self.accum),
                 ]))
 
                 m.d.sync += [
@@ -648,14 +588,14 @@ class Cpu(Component):
                 # Updates that only occur during hi phase:
                 with m.If(self.hi):
                     m.d.sync += self.pc[self.ctx].eq(oneof([
-                        (is_auipc_or_lui | is_alu | is_xpc | is_flip, pc_plus_4),
-                        (is_jal_or_jalr, Cat(self.shadow_pc, adder_result)),
-                        (is_store, mux(
+                        (dec.is_auipc_or_lui | dec.is_alu | is_xpc | is_flip, pc_plus_4),
+                        (dec.is_jal_or_jalr, Cat(self.shadow_pc, adder_result)),
+                        (dec.is_store, mux(
                             funct3_is[0b010],
                             self.pc[self.ctx],
                             pc_plus_4,
                         )),
-                        (is_load | is_b | is_csr, self.pc[self.ctx]),
+                        (dec.is_load | dec.is_b | dec.is_csr, self.pc[self.ctx]),
                     ]))
                     m.d.sync += self.ctx.eq(self.ctx ^ is_flip)
 
@@ -663,8 +603,8 @@ class Cpu(Component):
                 with m.If(~self.hi):
                     m.d.sync += self.mar_lo.eq(adder_result)
                     m.d.sync += self.shift_amt.eq(oneof([
-                        (is_alu_ri, inst_rs2),
-                        (is_alu_rr, rf.read_resp[:5]),
+                        (dec.is_alu_ri, inst_rs2),
+                        (dec.is_alu_rr, rf.read_resp[:5]),
                     ]))
                     m.d.sync += self.shift_lo.eq(self.accum)
 
@@ -673,21 +613,22 @@ class Cpu(Component):
                 m.d.sync += self.ustate.eq(mux(
                     ~self.hi,
                     oneof([
-                        (is_auipc_or_lui_or_jal | is_xpc | is_flip, UState.OPERATE),
-                        (is_b | is_load_or_jalr | is_store | is_alu | is_csr |
+                        (dec.is_auipc_or_lui_or_jal | is_xpc | is_flip, UState.OPERATE),
+                        (dec.is_b | dec.is_load_or_jalr | dec.is_store |
+                         dec.is_alu | dec.is_csr |
                          is_mret, UState.REG2),
                     ]),
                     oneof([
-                        (is_auipc_or_lui_or_jal | is_jalr | is_mret, UState.FETCH),
-                        (is_b, UState.BRANCH),
-                        (is_csr, UState.CSR),
-                        (is_load, UState.LOAD),
-                        (is_store, mux(
+                        (dec.is_auipc_or_lui_or_jal | dec.is_jalr | is_mret, UState.FETCH),
+                        (dec.is_b, UState.BRANCH),
+                        (dec.is_csr, UState.CSR),
+                        (dec.is_load, UState.LOAD),
+                        (dec.is_store, mux(
                             funct3_is[0b010],
                             UState.STORE,
                             UState.FETCH,
                         )),
-                        (is_alu, onehot_choice(funct3_is, {
+                        (dec.is_alu, onehot_choice(funct3_is, {
                             0b000: UState.FETCH,
                             0b001: UState.SHIFT,
                             0b010: UState.SLT,
@@ -701,7 +642,7 @@ class Cpu(Component):
                     ]),
                 ))
                 m.d.sync += self.hi.eq(mux(
-                    is_alu & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
+                    dec.is_alu & self.hi & (funct3_is[0b001] | funct3_is[0b101]),
                     self.hi,
                     ~self.hi,
                 ))
@@ -885,7 +826,7 @@ class Cpu(Component):
                         ),
                         rf.write_cmd.valid.eq(1),
 
-                        csr_file.cmd.valid.eq(is_csr),
+                        csr_file.cmd.valid.eq(dec.is_csr),
                     ]
                     m.d.sync += [
                         self.pc[self.ctx].eq(pc_plus_4),
