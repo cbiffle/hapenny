@@ -20,6 +20,8 @@ class Opcode(Enum):
     CUSTOM0 = 0b00001
 
 class DecodeSignals(Struct):
+    inst: unsigned(32)
+
     opcode: unsigned(5)
     funct3: unsigned(3)
     rs1: unsigned(5)
@@ -48,10 +50,15 @@ class DecodeSignals(Struct):
     is_csr: unsigned(1)
     writes_rd_normally: unsigned(1)
     is_imm_i: unsigned(1)
+    is_neg_imm_i: unsigned(1)
+    is_any_imm_i: unsigned(1)
     is_neg_reg_to_adder: unsigned(1)
     is_reg_to_adder: unsigned(1)
-    is_neg_imm_i: unsigned(1)
+    is_any_reg_to_adder: unsigned(1)
     is_shift: unsigned(1)
+    is_slt: unsigned(1)
+    is_sw: unsigned(1)
+    is_adder_rhs_complemented: unsigned(1)
 
     # one-hot decode of funct3
     funct3_is: unsigned(8)
@@ -84,6 +91,7 @@ class Decoder(Component):
         m.d.comb += opcode.eq(self.inst[2:7])
 
         m.d.comb += [
+            self.out.inst.eq(self.inst),
             self.out.opcode.eq(opcode),
             self.out.funct3.eq(self.inst[12:15]),
             self.out.rs1.eq(self.inst[15:20]),
@@ -142,6 +150,11 @@ class Decoder(Component):
                 (opcode == Opcode.ALUIMM) & (self.out.funct3_is[0b010] |
                                              self.out.funct3_is[0b011])
             ),
+            self.out.is_any_imm_i.eq(
+                (opcode == Opcode.Lxx) | (opcode == Opcode.JALR)
+                | (opcode == Opcode.ALUIMM)
+                | (opcode == Opcode.CUSTOM0)
+            ),
             self.out.is_neg_reg_to_adder.eq(
                 (opcode == Opcode.Bxx)
                 | ((opcode == Opcode.ALUREG) & (self.out.funct3_is[0b010] |
@@ -151,9 +164,25 @@ class Decoder(Component):
                 ((opcode == Opcode.ALUREG) & ~(self.out.funct3_is[0b010] |
                                                self.out.funct3_is[0b011]))
             ),
+            self.out.is_any_reg_to_adder.eq(
+                (opcode == Opcode.Bxx)
+                | (opcode == Opcode.ALUREG)
+            ),
             self.out.is_shift.eq(
                 self.out.is_alu & (self.out.funct3_is[0b001] |
                                    self.out.funct3_is[0b101])
+            ),
+            self.out.is_slt.eq(
+                self.out.is_alu & (self.out.funct3_is[0b010] |
+                                   self.out.funct3_is[0b011])
+            ),
+            self.out.is_sw.eq(
+                self.out.is_store & self.out.funct3_is[0b010]
+            ),
+            self.out.is_adder_rhs_complemented.eq(
+                self.out.is_neg_reg_to_adder
+                | self.out.is_neg_imm_i
+                | (self.out.is_reg_to_adder & self.out.inst[30])
             ),
         ]
 

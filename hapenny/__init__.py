@@ -2,6 +2,7 @@ from amaranth import *
 from amaranth.lib import data, enum, wiring
 from amaranth.lib.enum import Enum
 from amaranth.lib.wiring import In, Out
+from amaranth.lib.data import Struct
 
 from functools import reduce
 
@@ -27,10 +28,14 @@ def mux(select, one, zero):
         one = one.value
     if isinstance(one, int):
         one = Const(one)
+    if isinstance(one, Struct):
+        one = Value.cast(one)
     if isinstance(zero, Enum):
         zero = zero.value
     if isinstance(zero, int):
         zero = Const(zero)
+    if isinstance(zero, Struct):
+        zero = Value.cast(zero)
     n = max(one.shape().width, zero.shape().width)
     select = select.any() # force to 1 bit
     return (
