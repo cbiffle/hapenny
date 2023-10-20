@@ -10,18 +10,29 @@ from hapenny.decoder import ImmediateDecoder, Decoder, DecodeSignals
 from hapenny.regfile16 import RegFile16, RegWrite
 from hapenny.bus import BusPort
 from hapenny.csr16 import CsrFile16, CsrReg
-from hapenny.sbox import SBox
+from hapenny.sbox import SBox, STATE_COUNT
 from hapenny.fdbox import FDBox
 from hapenny.ewbox import EWBox
 
+# Note: all debug port signals are directional from the perspective of the DEBUG
+# PROBE, not the CPU.
 DebugPort = Signature({
+    # Address of register to read.
     'reg_read': Out(StreamSig(7)),
+    # Value that was read.
     'reg_value': In(16),
+    # Register write command.
     'reg_write': Out(StreamSig(RegWrite)),
+    # PC output from CPU.
     'pc': In(32),
+    # PC override signal
     'pc_write': Out(StreamSig(32)),
-    'ctx': Out(1),
-    'ctx_write': In(StreamSig(1)),
+    # Context output from CPU
+    'ctx': In(1),
+    # Context override signal
+    'ctx_write': Out(StreamSig(1)),
+    # State output from CPU
+    'state': In(STATE_COUNT),
 })
 
 class Cpu(Component):
@@ -78,6 +89,7 @@ class Cpu(Component):
             self.halted.eq(s.halted),
 
             self.debug.reg_value.eq(rf.read_resp),
+            self.debug.state.eq(s.onehot_state),
         ]
 
         # Manually combine the register file write port.
