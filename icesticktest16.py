@@ -1,5 +1,4 @@
 import itertools
-import random
 import argparse
 
 from amaranth import *
@@ -14,10 +13,12 @@ from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.gpio import OutputPort
 
 RAM_WORDS = 256 * 1
-BUS_ADDR_BITS = (RAM_WORDS - 1).bit_length()
+RAM_ADDR_BITS = (RAM_WORDS - 1).bit_length()
+
+BUS_ADDR_BITS = RAM_ADDR_BITS + 1  # I/O bit
 
 class TestMemory(Component):
-    bus: In(BusPort(addr = BUS_ADDR_BITS, data = 16))
+    bus: In(BusPort(addr = RAM_ADDR_BITS, data = 16))
 
     def __init__(self, contents):
         super().__init__()
@@ -63,10 +64,10 @@ class Test(Elaboratable):
     def elaborate(self, platform):
         m = Module()
         m.submodules.cpu = cpu = Cpu(
-            addr_width = BUS_ADDR_BITS + 1 + 1,
+            # +1 because byte addressing.
+            addr_width = BUS_ADDR_BITS + 1,
             has_interrupt = self.has_interrupt,
         )
-        random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
             # 00000000 <reset>:
             #    0:   20000093                li      ra,512
@@ -115,7 +116,7 @@ class Test(Elaboratable):
         m.submodules.port = port = OutputPort(1)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
-            partial_decode(m, port.bus, BUS_ADDR_BITS),
+            partial_decode(m, port.bus, RAM_ADDR_BITS),
         ])
 
         connect(m, cpu.bus, fabric.bus)
