@@ -49,6 +49,7 @@ class Cpu(Component):
             prog_addr_width = self.prog_addr_width,
         )
         self.ew = EWBox(
+            addr_width = addr_width,
             prog_addr_width = self.prog_addr_width,
         )
 
@@ -123,6 +124,8 @@ class Cpu(Component):
             self.bus.cmd.valid.eq(
                 fd.bus.cmd.valid | ew.bus.cmd.valid
             ),
+            # Note that this will zero-extend the FD address if it's shorter
+            # than the full bus (because prog_addr_width is dialed back).
             self.bus.cmd.payload.addr.eq(
                 fd.bus.cmd.payload.addr | ew.bus.cmd.payload.addr
             ),

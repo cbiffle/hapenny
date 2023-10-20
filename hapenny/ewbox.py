@@ -85,13 +85,14 @@ class EWBox(Component):
     debug_pc_write: In(StreamSig(32))
 
     def __init__(self, *,
+                 addr_width = 32,
                  prog_addr_width = 32,
                  ):
         super().__init__()
 
-        # Create a bus port of sufficient width to fetch instructions only.
+        # Create a bus port of sufficient width to address anything on the bus.
         # (Width is -1 because we're addressing halfwords.)
-        self.bus = BusPort(addr = prog_addr_width - 1, data = 16).create()
+        self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         # The PC width is -2 because it's addressing words.
         self.pc_next = Signal(prog_addr_width - 2)
