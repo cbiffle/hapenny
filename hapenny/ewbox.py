@@ -509,7 +509,7 @@ class EWBox(Component):
                 # rs2.hi, except for stores which read lo
                 (self.onehot_state[2], Cat(dec.rs2, ~dec.is_store)),
                 # duplicate rs2.hi for word stores
-                (self.onehot_state[3] & dec.is_store & self.full,
+                (self.onehot_state[3] & dec.is_store & dec.funct3_is[0b010] & self.full,
                  Cat(dec.rs2, 1)),
             ])),
         ]
