@@ -59,6 +59,7 @@ class DecodeSignals(Struct):
     is_slt: unsigned(1)
     is_sw: unsigned(1)
     is_adder_rhs_complemented: unsigned(1)
+    writes_adder_to_reg: unsigned(1)
 
     # one-hot decode of funct3
     funct3_is: unsigned(8)
@@ -183,6 +184,10 @@ class Decoder(Component):
                 self.out.is_neg_reg_to_adder
                 | self.out.is_neg_imm_i
                 | (self.out.is_reg_to_adder & self.out.inst[30])
+            ),
+            self.out.writes_adder_to_reg.eq(
+                self.out.is_auipc_or_lui | (self.out.is_alu &
+                                            self.out.funct3_is[0b000])
             ),
         ]
 

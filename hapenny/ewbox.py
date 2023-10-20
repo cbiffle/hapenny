@@ -163,16 +163,16 @@ class EWBox(Component):
 
         m.d.sync += [
             shift_amt.eq(onehot_choice(self.onehot_state, {
-                1: oneof([
-                    (dec.is_alu_ri, dec.rs2),
-                    (dec.is_alu_rr, self.rf_resp[:5]),
-                ]),
+                1: mux(
+                    dec.is_alu_ri,
+                    dec.rs2,
+                    self.rf_resp[:5],
+                ),
                 4: shift_amt - 1,
             }, default = shift_amt)),
             shift_lo.eq(oneof([
                 (self.onehot_state[1], self.accum),
-                (self.onehot_state[4] & (shift_amt != 0),
-                 mux(
+                (self.onehot_state[4] & (shift_amt != 0), mux(
                      dec.funct3[2],
                      Cat(shift_lo[1:], self.accum[0]), # right shift
                      Cat(0, shift_lo), # left shift
@@ -180,63 +180,10 @@ class EWBox(Component):
             ], default = shift_lo)),
         ]
 
-        # Program Counter management
-        end_of_instruction = Signal(1)
-        start_bubble = Signal(1)
-        pc_inc = Signal(self.pc.shape().width)
-        shadow_pc = Signal(16 - 2)
-        m.d.comb += [
-            # Dedicated program counter incrementer.
-            pc_inc.eq(self.pc + 1),
-            # Address we send to FD / load into PC
-            self.pc_next.eq(mux(
-                self.full,
-                # When full, the PC we send is either...
-                mux(
-                    # ... when taking a branch,
-                    dec.is_jal_or_jalr
-                        | (dec.is_b & self.onehot_state[5]),
-                    # the computed PC,
-                    Cat(shadow_pc, adder_result),
-                    # Otherwise, PC+1
-                    pc_inc,
-                ),
-                # When not full, send current PC to fetch current instruction
-                # rather than next.
-                self.pc,
-            )),
-        ]
-        m.d.sync += [
-            # We use the shadow-PC to latch the bottom half of computed targets.
-            shadow_pc.eq(mux(
-                self.onehot_state[1] | self.onehot_state[4],
-                adder_result[2:],
-                shadow_pc,
-            )),
-
-            self.pc.eq(oneof([
-                (self.onehot_state[STATE_COUNT - 1] & self.debug_pc_write.valid,
-                 self.debug_pc_write.payload[2:]),
-                (end_of_instruction & self.full, self.pc_next),
-            ], default = self.pc)),
-            self.full.eq(oneof([
-                # If halted, we are not full, to ensure a fetch and refill when
-                # we resume.
-                (self.onehot_state[STATE_COUNT - 1], 0),
-                # Otherwise, we become empty only at the end of an instruction
-                # when a bubble is required.
-                (end_of_instruction, ~start_bubble),
-            ], default = self.full)),
-        ]
-
         # Effective address generation and bus transactions
-        # TODO: see about merging this with shadow_pc
+        # mar_lo is used for loads/stores, but also as the low half of the new
+        # PC value during a computed branch.
         mar_lo = Signal(16)
-        m.d.sync += mar_lo.eq(mux(
-            self.onehot_state[1],
-            adder_result,
-            mar_lo,
-        ))
 
         m.d.comb += [
             self.bus.cmd.valid.eq(
@@ -273,6 +220,52 @@ class EWBox(Component):
                     self.rf_resp,
                 ),
             })),
+        ]
+        m.d.sync += mar_lo.eq(mux(
+            self.onehot_state[1] | self.onehot_state[4],
+            adder_result,
+            mar_lo,
+        ))
+
+        # Program Counter management
+        end_of_instruction = Signal(1)
+        start_bubble = Signal(1)
+        pc_inc = Signal(self.pc.shape().width)
+        m.d.comb += [
+            # Dedicated program counter incrementer.
+            pc_inc.eq(self.pc + 1),
+            # Address we send to FD / load into PC
+            self.pc_next.eq(mux(
+                self.full,
+                # When full, the PC we send is either...
+                mux(
+                    # ... when taking a branch,
+                    dec.is_jal_or_jalr
+                        | (dec.is_b & self.onehot_state[5]),
+                    # the computed PC,
+                    Cat(mar_lo[2:], adder_result),
+                    # Otherwise, PC+1
+                    pc_inc,
+                ),
+                # When not full, send current PC to fetch current instruction
+                # rather than next.
+                self.pc,
+            )),
+        ]
+        m.d.sync += [
+            self.pc.eq(oneof([
+                (self.onehot_state[STATE_COUNT - 1] & self.debug_pc_write.valid,
+                 self.debug_pc_write.payload[2:]),
+                (end_of_instruction & self.full, self.pc_next),
+            ], default = self.pc)),
+            self.full.eq(oneof([
+                # If halted, we are not full, to ensure a fetch and refill when
+                # we resume.
+                (self.onehot_state[STATE_COUNT - 1], 0),
+                # Otherwise, we become empty only at the end of an instruction
+                # when a bubble is required.
+                (end_of_instruction, ~start_bubble),
+            ], default = self.full)),
         ]
 
         # Load lane mixer
@@ -328,17 +321,19 @@ class EWBox(Component):
 
         # Register file write port
         m.d.comb += [
-            self.rf_write_cmd.valid.eq(onehot_choice(self.onehot_state, {
-                1: self.full & dec.writes_rd_normally,
-                3: self.full & dec.writes_rd_normally,
-                4: self.full & (dec.is_load | dec.is_alu),
-                5: self.full & (dec.is_load | dec.is_shift),
+            self.rf_write_cmd.valid.eq(self.full & onehot_choice(self.onehot_state, {
+                1: dec.writes_rd_normally,
+                3: dec.writes_rd_normally,
+                4: dec.is_load | dec.is_alu,
+                5: dec.is_load | dec.is_shift,
             })),
             self.rf_write_cmd.payload.reg.eq(
                 Cat(dec.rd, self.onehot_state[3] | self.onehot_state[5])
             ),
             self.rf_write_cmd.payload.value.eq(oneof([
-                (dec.is_auipc_or_lui, adder_result),
+                # Hoisted add out of the ALU select mux below because it tends
+                # to be the critical path to the register file.
+                (dec.writes_adder_to_reg, adder_result),
                 (dec.is_jal_or_jalr, choosehalf(
                     self.onehot_state[3],
                     Cat(0, 0, pc_inc),
@@ -350,16 +345,8 @@ class EWBox(Component):
                     self.accum,
                 )),
                 (dec.is_alu, onehot_choice(dec.funct3_is, {
-                    # ADD
-                    0b000: adder_result,
-                    # SLL
-                    0b001: mux(
-                        self.onehot_state[5],
-                        self.accum,
-                        shift_lo,
-                    ),
-                    # SRL
-                    0b101: mux(
+                    # Shifts
+                    (0b001, 0b101): mux(
                         self.onehot_state[5],
                         self.accum,
                         shift_lo,
@@ -415,10 +402,10 @@ class EWBox(Component):
             # We signal state restart as a side effect of the EOI signal.
             self.from_the_top.eq(end_of_instruction),
 
-            start_bubble.eq(onehot_choice(self.onehot_state, {
+            start_bubble.eq(self.full & onehot_choice(self.onehot_state, {
                 # Because bubbles end in state 3, it's important to include
                 # self.full here to make forward progress.
-                3: self.full & dec.is_jal_or_jalr,
+                3: dec.is_jal_or_jalr,
                 # Any branch that makes it to state 5 is being taken, and so is
                 # creating a bubble.
                 5: dec.is_b,

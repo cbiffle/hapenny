@@ -1,5 +1,4 @@
 import itertools
-import random
 import argparse
 
 from amaranth import *
@@ -66,7 +65,6 @@ class Test(Elaboratable):
             # +1 for byte addressing, +1 more for the mem/I/O bit.
             addr_width = BUS_ADDR_BITS + 1 + 1,
         )
-        random.seed("omglol")
         m.submodules.mem = mem = TestMemory([
             # 00000000 <reset>:
             #    0:   20000093                li      ra,512
