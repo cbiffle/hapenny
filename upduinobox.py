@@ -12,6 +12,7 @@ from hapenny import StreamSig
 from hapenny.boxcpu import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.serial import BidiUart
+from hapenny.mem import BasicMemory
 
 RAM_WORDS = 256 * 2
 RAM_ADDR_BITS = (RAM_WORDS - 1).bit_length()
@@ -22,44 +23,6 @@ print(f"configuring for {RAM_ADDR_BITS}-bit RAM and {BUS_ADDR_BITS}-bit bus")
 
 bootloader = Path("tiny-bootloader.bin").read_bytes()
 boot_image = struct.unpack("<" + "h" * (len(bootloader) // 2), bootloader)
-
-class TestMemory(Component):
-    bus: In(BusPort(addr = RAM_ADDR_BITS, data = 16))
-
-    def __init__(self, contents):
-        super().__init__()
-
-        self.m = Memory(
-            width = 16,
-            depth = RAM_WORDS,
-            name = "testram",
-            init = contents,
-        )
-
-    def elaborate(self, platform):
-        m = Module()
-
-        m.submodules.m = self.m
-
-        rp = self.m.read_port(transparent = False)
-        wp = self.m.write_port(granularity = 8)
-
-        m.d.comb += [
-            rp.addr.eq(self.bus.cmd.payload.addr),
-            rp.en.eq(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0)),
-
-            wp.addr.eq(self.bus.cmd.payload.addr),
-            wp.data.eq(self.bus.cmd.payload.data),
-            wp.en[0].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]),
-            wp.en[1].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]),
-        ]
-
-        m.d.comb += [
-            self.bus.resp.eq(rp.data),
-        ]
-
-        return m
-
 
 class Test(Elaboratable):
     def elaborate(self, platform):
@@ -74,7 +37,8 @@ class Test(Elaboratable):
             # bytes.)
             prog_addr_width = RAM_ADDR_BITS + 1,
         )
-        m.submodules.mem = mem = TestMemory(boot_image)
+        m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
+                                             contents = boot_image)
         m.submodules.uart = uart = BidiUart(baud_rate = 115200)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,

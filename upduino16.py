@@ -19,6 +19,7 @@ from hapenny import StreamSig
 from hapenny.cpu16 import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.gpio import OutputPort
+from hapenny.mem import BasicMemory
 
 RAM_WORDS = 256 * 1
 RAM_ADDR_BITS = (RAM_WORDS - 1).bit_length()
@@ -26,44 +27,6 @@ RAM_ADDR_BITS = (RAM_WORDS - 1).bit_length()
 BUS_ADDR_BITS = RAM_ADDR_BITS + 1
 
 print(f"configuring for {RAM_ADDR_BITS}-bit RAM and {BUS_ADDR_BITS}-bit bus")
-
-class TestMemory(Component):
-    bus: In(BusPort(addr = RAM_ADDR_BITS, data = 16))
-
-    def __init__(self, contents):
-        super().__init__()
-
-        self.m = Memory(
-            width = 16,
-            depth = RAM_WORDS,
-            name = "testram",
-            init = contents,
-        )
-
-    def elaborate(self, platform):
-        m = Module()
-
-        m.submodules.m = self.m
-
-        rp = self.m.read_port(transparent = False)
-        wp = self.m.write_port(granularity = 8)
-
-        m.d.comb += [
-            rp.addr.eq(self.bus.cmd.payload.addr),
-            rp.en.eq(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0)),
-
-            wp.addr.eq(self.bus.cmd.payload.addr),
-            wp.data.eq(self.bus.cmd.payload.data),
-            wp.en[0].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]),
-            wp.en[1].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]),
-        ]
-
-        m.d.comb += [
-            self.bus.resp.eq(rp.data),
-        ]
-
-        return m
-
 
 class Test(Elaboratable):
     def elaborate(self, platform):
@@ -73,7 +36,7 @@ class Test(Elaboratable):
             # +1 to adjust from bus halfword addressing to CPU byte addressing.
             addr_width = BUS_ADDR_BITS + 1,
         )
-        m.submodules.mem = mem = TestMemory([
+        m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS, contents = [
             # 00000000 <reset>:
             #    0:   20000293                li      t0,512
             0x0293,

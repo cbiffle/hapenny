@@ -7,6 +7,7 @@ from amaranth.lib.enum import *
 from hapenny.boxcpu import Cpu
 from hapenny.bus import BusPort, partial_decode, SimpleFabric
 from hapenny import *
+from hapenny.mem import BasicMemory
 
 class TestPhase(Enum):
     INIT = 0
@@ -14,45 +15,23 @@ class TestPhase(Enum):
     RUN = 2
     CHECK = 3
 
-class TestMemory(Component):
-    bus: In(BusPort(addr = 8, data = 16))
-
-    inspect: In(BusPort(addr = 8, data = 16))
-
+class TestMemory(BasicMemory):
     def __init__(self, contents):
-        super().__init__()
-
-        self.m = Memory(
-            width = 16,
+        super().__init__(
+            contents = contents,
             depth = 256,
-            name = "testram",
-            init = contents,
         )
 
+        # make a second bus port
+        self.inspect = BusPort(
+            addr = self.bus.cmd.payload.addr.shape().width + 1,
+            data = 16,
+        ).flip().create()
+
     def elaborate(self, platform):
-        m = Module()
+        m = super().elaborate(platform)
 
-        m.submodules.m = self.m
-
-        rp = self.m.read_port(transparent = False)
-        wp = self.m.write_port(granularity = 8)
-
-        m.d.comb += [
-            rp.addr.eq(self.bus.cmd.payload.addr),
-            rp.en.eq(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0b00)),
-
-            wp.addr.eq(self.bus.cmd.payload.addr),
-            wp.data.eq(self.bus.cmd.payload.data),
-            wp.en[0].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]),
-            wp.en[1].eq(self.bus.cmd.valid & self.bus.cmd.payload.lanes[1]),
-        ]
-
-        m.d.comb += [
-            self.bus.resp.eq(rp.data),
-        ]
-
-        # Do it all again for the inspect port
-
+        # Create a second read/write port.
         inspect_rp = self.m.read_port(transparent = False)
         inspect_wp = self.m.write_port(granularity = 8)
 
@@ -67,9 +46,7 @@ class TestMemory(Component):
                                 self.inspect.cmd.payload.lanes[0]),
             inspect_wp.en[1].eq(self.inspect.cmd.valid &
                                 self.inspect.cmd.payload.lanes[1]),
-        ]
 
-        m.d.comb += [
             self.inspect.resp.eq(inspect_rp.data),
         ]
 
