@@ -1,5 +1,7 @@
 import itertools
 import argparse
+import struct
+from pathlib import Path
 
 from amaranth import *
 from amaranth.lib.wiring import *
@@ -11,11 +13,15 @@ from hapenny import StreamSig
 from hapenny.boxcpu import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.gpio import OutputPort
+from hapenny.serial import BidiUart
 
-RAM_WORDS = 256 * 1
+RAM_WORDS = 256 * 2
 RAM_ADDR_BITS = (RAM_WORDS - 1).bit_length()
 
 BUS_ADDR_BITS = RAM_ADDR_BITS + 1
+
+bootloader = Path("tiny-bootloader.bin").read_bytes()
+boot_image = struct.unpack("<" + "h" * (len(bootloader) // 2), bootloader)
 
 class TestMemory(Component):
     bus: In(BusPort(addr = RAM_ADDR_BITS, data = 16))
@@ -72,71 +78,19 @@ class Test(Elaboratable):
             # bytes.)
             prog_addr_width = RAM_ADDR_BITS + 1,
         )
-        m.submodules.mem = mem = TestMemory([
-            # 00000000 <reset>:
-            #    0:   20000093                li      ra,512
-            0x0093,
-            0x2000,
-            #    4:   00100113                li      sp,1
-            0x0113,
-            0x0010,
-            #    8:   000f51b7                li      gp,0xf5
-            0x000f,
-            0x51b7,
-            # 
-            # 0000000c <loop>:
-            #    c:   00209023                sh      sp,0(ra)
-            0x9023,
-            0x0020,
-            #   10:   00018213                mv      tp,gp
-            0x8213,
-            0x0001,
-            # 
-            # 00000014 <loop2>:
-            #   14:   fff20213                addi    tp,tp,-1
-            0x0213,
-            0xfff2,
-            #   18:   fe020ee3                beqz    tp,14 <loop2>
-            0x0ee3,
-            0xfe02,
-            #   1c:   00009023                sh      zero,0(ra)
-            0x9023,
-            0x0000,
-            #   20:   00018213                mv      tp,gp
-            0x8213,
-            0x0001,
-            # 
-            # 00000024 <loop3>:
-            #   24:   fff20213                addi    tp,tp,-1
-            0x0213,
-            0xfff2,
-            #   28:   fe0206e3                beqz    tp,14 <loop2>
-            0x06e3,
-            0xfe02,
-            #   2c:   fe1ff06f                j       c <loop>
-            0xf06f,
-            0xfe1f,
-        ])
-        m.submodules.port = port = OutputPort(1)
+        m.submodules.mem = mem = TestMemory(boot_image)
+        m.submodules.uart = uart = BidiUart(baud_rate = 115_200)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
-            partial_decode(m, port.bus, RAM_ADDR_BITS),
+            partial_decode(m, uart.bus, RAM_ADDR_BITS),
         ])
 
         connect(m, cpu.bus, fabric.bus)
 
-        def get_all_resources(name):
-            resources = []
-            for number in itertools.count():
-                try:
-                    resources.append(platform.request(name, number))
-                except ResourceError:
-                    break
-            return resources
-
-        leds     = [res.o for res in get_all_resources("led")]
+        uartport = platform.request("uart", 0)
         m.d.comb += [
-            leds[0].eq(port.pins),
+            uartport.tx.o.eq(uart.tx),
+            uart.rx.eq(uartport.rx.i),
         ]
         if self.has_interrupt is not None:
             irq = platform.request("irq", 0)
