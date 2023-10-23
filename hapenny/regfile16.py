@@ -32,6 +32,9 @@ class RegFile16(Component):
             width = 16,
             depth = 2 * nregs,
             name = "regfile",
+            attrs = {
+                'ram_style': 'block',
+            },
         )
 
         rp = mem.read_port(transparent = False)
