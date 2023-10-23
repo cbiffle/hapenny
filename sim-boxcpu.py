@@ -168,7 +168,7 @@ def read_mem(addr):
 
     return bottom | (top << 16)
 
-def test_inst(name, inst, *, before = {}, after = {}):
+def test_inst(name, inst, *, before = {}, after = {}, stop_at = None):
     print(f"{name} ... ", end='')
     yield phase.eq(TestPhase.SETUP)
     for r in range(1, 32):
@@ -202,8 +202,15 @@ def test_inst(name, inst, *, before = {}, after = {}):
 
     yield phase.eq(TestPhase.RUN)
     cycle_count = 0
-    for i in range(instruction_count):
-        cycle_count += yield from single_step()
+    if stop_at is not None:
+        while True:
+            cycle_count += yield from single_step()
+            pc = yield from read_pc()
+            if pc == stop_at:
+                break
+    else:
+        for i in range(instruction_count):
+            cycle_count += yield from single_step()
     yield
 
     print(f"({cycle_count} cyc) ", end='')
@@ -213,8 +220,11 @@ def test_inst(name, inst, *, before = {}, after = {}):
         for key, value in after.items():
             if isinstance(key, int):
                 actual = yield from read_reg(key)
-                assert actual == value, \
-                        f"r{key} should be 0x{value:x} but is 0x{actual:x}"
+                if value is not None:
+                    assert actual == value, \
+                            f"r{key} should be 0x{value:x} but is 0x{actual:x}"
+                else:
+                    print(f"r{key} (unconstrained) is 0x{actual:x}")
             elif isinstance(key, str) and key[0] == '@':
                 addr = int(key[1:], 16)
                 actual = yield from read_mem(addr)
@@ -359,6 +369,8 @@ if __name__ == "__main__":
             ("NE", 0b001, 0xCAFEBABE, 0xCAFEBABE, False),
             ("LT", 0b100, 0xCAFEBABE, 0x12345678, True),
             ("LT", 0b100, 0x12345678, 0xCAFEBABE, False),
+            ("LT", 0b100, 0, 0xA, True),
+            ("LT", 0b100, 0xA, 0, False),
             ("GE", 0b101, 0x12345678, 0xCAFEBABE, True),
             ("GE", 0b101, 0xCAFEBABE, 0x12345678, False),
             ("LTU", 0b110, 0x12345678, 0xCAFEBABE, True),
@@ -384,6 +396,17 @@ if __name__ == "__main__":
                     'PC': 0xF000 + (0x400 if taken else 4),
                 },
             )
+        yield from test_inst(
+            "blez x2, 0x400",
+            0b0_100000_00010_00000_101_0000_0_1100011,
+            before={
+                'PC': 0xF000,
+                2: 0xA,
+            },
+            after={
+                'PC': 0xF004,
+            },
+        )
 
         load_cases = [
             ("LW", 0b010, 0x12345678, 0, 0x12345678),
@@ -700,6 +723,60 @@ if __name__ == "__main__":
                     },
                 )
 
+        yield from test_inst(
+            f"div test",
+            [
+    # 8968/0      00058613                mv      a2,a1
+                0x00058613,
+    # 896c/4      00050593                mv      a1,a0
+                0x00050593,
+    # 8970/8      fff00513                li      a0,-1
+                0xfff00513,
+    # 8974/c      02060c63                beqz    a2,89ac <__hidden___udivsi3+0x44>
+                0x02060c63,
+    # 8978/10     00100693                li      a3,1
+                0x00100693,
+    # 897c/14     00b67a63                bgeu    a2,a1,8990 <__hidden___udivsi3+0x28>
+                0x00b67a63,
+    # 8980/18     00c05863                blez    a2,8990 <__hidden___udivsi3+0x28>
+                0x00c05863,
+    # 8984/1c     00161613                slli    a2,a2,0x1
+                0x00161613,
+    # 8988/20     00169693                slli    a3,a3,0x1
+                0x00169693,
+    # 898c/24     feb66ae3                bltu    a2,a1,8980 <__hidden___udivsi3+0x18>
+                0xfeb66ae3,
+    # 8990/28     00000513                li      a0,0
+                0x00000513,
+    # 8994/2c     00c5e663                bltu    a1,a2,89a0 <__hidden___udivsi3+0x38>
+                0x00c5e663,
+    # 8998/30     40c585b3                sub     a1,a1,a2
+                0x40c585b3,
+    # 899c/34     00d56533                or      a0,a0,a3
+                0x00d56533,
+    # 89a0/38     0016d693                srli    a3,a3,0x1
+                0x0016d693,
+    # 89a4/3c     00165613                srli    a2,a2,0x1
+                0x00165613,
+    # 89a8/40     fe0696e3                bnez    a3,8994 <__hidden___udivsi3+0x2c>
+                0xfe0696e3,
+    # 89ac/44     00008067                ret
+                0x00008067,
+            ],
+            stop_at = 0x44,
+            before={
+                1: 0,
+                10: 100_000,
+                11: 10,
+            },
+            after={
+                10: 10_000,
+                11: 0,
+                12: None,
+                13: None,
+                'PC': 0x44,
+            },
+        )
         #yield from test_inst(
         #    f"CSRRWI x1, mscratch, 17",
         #    0b0011_0100_0000_10001_101_00001_1110011,

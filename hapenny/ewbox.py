@@ -222,9 +222,9 @@ class EWBox(Component):
         m.d.comb += [
             unsigned_less_than.eq(~adder_carry_out),
             signed_less_than.eq(mux(
-                self.accum[15] ^ adder_rhs[15],
+                self.accum[15] ^ ~adder_rhs[15],
                 self.accum[15],
-                adder_carry_out,
+                ~adder_carry_out,
             )),
         ]
         # Generate delayed versions.
