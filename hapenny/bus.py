@@ -60,6 +60,9 @@ class SimpleFabric(Elaboratable):
         expecting = Signal(1)
         # When expecting, this is the address of the device.
         expecting_id = Signal(self.extra_bits)
+        devid = Signal(self.extra_bits)
+        m.d.comb += devid.eq(self.bus.cmd.payload.addr[self.addr_bits:])
+
         # Stop expecting automatically after one cycle.
         with m.If(expecting):
             m.d.sync += expecting.eq(0)
@@ -67,11 +70,9 @@ class SimpleFabric(Elaboratable):
         with m.If(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0)):
             m.d.sync += [
                 expecting.eq(1),
-                expecting_id.eq(self.bus.cmd.payload.addr[self.addr_bits:]),
+                expecting_id.eq(devid),
             ]
 
-        devid = Signal(self.extra_bits)
-        m.d.comb += devid.eq(self.bus.cmd.payload.addr[self.addr_bits:])
 
         for (i, d) in enumerate(self.devices):
             # Fan out the incoming address, data, and lanes to every device.
