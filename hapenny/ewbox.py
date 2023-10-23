@@ -85,6 +85,7 @@ class EWBox(Component):
     debug_pc_write: In(StreamSig(32))
 
     def __init__(self, *,
+                 reset_vector = 0,
                  addr_width = 32,
                  prog_addr_width = 32,
                  ):
@@ -98,7 +99,7 @@ class EWBox(Component):
         self.pc_next = Signal(prog_addr_width - 2)
 
         self.accum = Signal(16)
-        self.pc = Signal(prog_addr_width - 2)
+        self.pc = Signal(prog_addr_width - 2, reset = reset_vector >> 2)
 
     def elaborate(self, platform):
         m = Module()

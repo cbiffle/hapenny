@@ -42,6 +42,7 @@ class Cpu(Component):
     debug: In(DebugPort)
 
     def __init__(self, *,
+                 reset_vector = 0,
                  addr_width = 32,
                  prog_addr_width = None):
         super().__init__()
@@ -60,6 +61,7 @@ class Cpu(Component):
             prog_addr_width = self.prog_addr_width,
         )
         self.ew = EWBox(
+            reset_vector = reset_vector,
             addr_width = addr_width,
             prog_addr_width = self.prog_addr_width,
         )
