@@ -41,8 +41,20 @@ class EWBox(Component):
 
     Parameters
     ----------
-    prog_addr_width (integer): number of bits in a program address, 32 by default
-        but can be shrunk to save logic.
+    reset_vector (int): address where the CPU will begin fetching instructions
+        after reset. Default 0 if not provided.
+    addr_width (int): number of low-order bits that are significant in memory
+        addresses. The default is 32; if this is reduced, memory and I/O
+        devices will appear to repeat at higher addresses because the top bits
+        won't be decoded. Note that this parameter is in terms of byte
+        addresses (the numbers RV32I software deals with); the actual bus port
+        has addr_width-1 address lines because it addresses halfwords.
+    prog_addr_width (int): number of low-order bits that are significant in
+        instruction addresses. This determines the width of the PC register(s)
+        and fetch path. If program storage is in the lower section of the
+        address range, and I/O devices higher, you can set this parameter to
+        smaller than addr_width to save some area. If not explicitly
+        overridden, this is the same as addr_width.  addr_width.
 
     Attributes
     ----------
@@ -68,7 +80,8 @@ class EWBox(Component):
         bubble until the first fetch completes, and we clear it on instruction
         stream changes.
     pc (output): Current contents of PC register, mostly for debug port.
-    debug_pc_write (port): while halted, can overwrite the PC.
+    debug_pc_write (port): while halted, can overwrite the PC with a word
+        address (bottom two bits implied as zero).
     hold (output): Indicates that we're going to repeat this state, signals
         s-box to maintain it.
     """
@@ -82,7 +95,7 @@ class EWBox(Component):
     full: Out(1)
     hold: Out(1)
 
-    debug_pc_write: In(StreamSig(32))
+    debug_pc_write: In(StreamSig(32 - 2))
 
     def __init__(self, *,
                  reset_vector = 0,
@@ -448,7 +461,7 @@ class EWBox(Component):
                 # In the halted sate, we allow the program counter to be
                 # overwritten from the debug port.
                 (self.onehot_state[STATE_COUNT - 1] & self.debug_pc_write.valid,
-                 self.debug_pc_write.payload[2:]),
+                 self.debug_pc_write.payload),
                 # Otherwise, in the final cycle of any instruction, we latch the
                 # pc_next value we were sending to FD-Box.
                 (end_of_instruction & self.full, self.pc_next),

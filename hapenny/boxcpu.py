@@ -17,25 +17,62 @@ from hapenny.ewbox import EWBox
 # Note: all debug port signals are directional from the perspective of the DEBUG
 # PROBE, not the CPU.
 DebugPort = Signature({
-    # Address of register to read.
+    # Register read port. The CPU asserts READY on this port when it is halted
+    # and the register file is available for inspection. Debug probes should
+    # place a register number on the payload signals and assert VALID; the
+    # response will come on reg_value on the next cycle.
     'reg_read': Out(StreamSig(7)),
-    # Value that was read.
+    # Value that was read from the reg_read port above.
     'reg_value': In(16),
-    # Register write command.
+    # Register write command. Works roughly like reg_read, e.g. only READY when
+    # the CPU is halted.
     'reg_write': Out(StreamSig(RegWrite)),
-    # PC output from CPU.
+    # PC output from CPU. This is always valid. If the CPU's PC is narrower
+    # than 32 bits (the prog_addr_width parameter) then its value is
+    # zero-extended on this port.
     'pc': In(32),
-    # PC override signal
+    # PC override signal. Becomes READY when the CPU is halted; assert a new
+    # value with VALID here to change the next instruction that will be
+    # fetched. If the PC is narrower than 32 bits (the prog_addr_width
+    # parameter) then the higher bits in this path are ignored.
     'pc_write': Out(StreamSig(32)),
-    # Context output from CPU
+    # Context output from CPU. Currently unused in this model.
     'ctx': In(1),
-    # Context override signal
+    # Context override signal. Currently unused in this model.
     'ctx_write': Out(StreamSig(1)),
-    # State output from CPU
+    # State output from CPU. This is a one-hot encoding of the CPU's internal
+    # execution state, mostly intended for testbenches.
     'state': In(STATE_COUNT),
 })
 
 class Cpu(Component):
+    """An RV32I core using a 16-bit datapath, with overlapped fetch and
+    execute for reasonable performance.
+
+    Parameters
+    ----------
+    addr_width (int): number of low-order bits that are significant in memory
+        addresses. The default is 32; if this is reduced, memory and I/O
+        devices will appear to repeat at higher addresses because the top bits
+        won't be decoded. Note that this parameter is in terms of byte
+        addresses (the numbers RV32I software deals with); the actual bus port
+        has addr_width-1 address lines because it addresses halfwords.
+    prog_addr_width (int): number of low-order bits that are significant in
+        instruction addresses. This determines the width of the PC register(s)
+        and fetch path. If program storage is in the lower section of the
+        address range, and I/O devices higher, you can set this parameter to
+        smaller than addr_width to save some area. If not explicitly
+        overridden, this is the same as addr_width.  addr_width.
+
+    Attributes
+    ----------
+    bus (both): connection to the bus, 16 bit data path and `addr_width - 1`
+        address bits.
+    debug (both): debug port for testing or development.
+    halt_request (in): when asserted (1), requests that the CPU stop at the
+        next instruction boundary. Release (0) to resume.
+    halted (out): raised when the CPU has halted.
+    """
     halt_request: In(1)
     halted: Out(1)
 
@@ -47,13 +84,12 @@ class Cpu(Component):
                  prog_addr_width = None):
         super().__init__()
 
-        self.bus = BusPort(addr = addr_width - 1, data = 16).create()
-
+        # Capture and derive parameter values
         self.addr_width = addr_width
-        if prog_addr_width is None:
-            self.prog_addr_width = self.addr_width
-        else:
-            self.prog_addr_width = prog_addr_width
+        self.prog_addr_width = prog_addr_width or addr_width
+
+        # Create our parameterized ports and modules
+        self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         self.s = SBox()
         self.rf = RegFile16()
@@ -69,6 +105,7 @@ class Cpu(Component):
     def elaborate(self, platform):
         m = Module()
 
+        # Make the elaborator aware of all our submodules, and wire them up.
         m.submodules.regfile = rf = self.rf
         m.submodules.s = s = self.s
         m.submodules.fd = fd = self.fd
@@ -82,6 +119,9 @@ class Cpu(Component):
 
             ew.onehot_state.eq(s.onehot_state),
             ew.inst_next.eq(fd.inst_next),
+            ew.debug_pc_write.valid.eq(self.debug.pc_write.valid),
+            # Drop the bottom two bits of any incoming PC before feeding to EW.
+            ew.debug_pc_write.payload.eq(self.debug.pc_write.payload[2:]),
 
             s.from_the_top.eq(ew.from_the_top),
             s.halt_request.eq(self.halt_request),
@@ -92,9 +132,15 @@ class Cpu(Component):
 
             self.debug.reg_value.eq(rf.read_resp),
             self.debug.state.eq(s.onehot_state),
+            # Internal PCs never have bits 0/1, but the debug port deals in
+            # 32-bit addresses, so add LSBs when exposing the PC:
+            self.debug.pc.eq(Cat(0, 0, ew.pc)),
+            self.debug.pc_write.ready.eq(ew.debug_pc_write.ready),
         ]
 
-        # Manually combine the register file write port.
+        # Combine the register file write ports from EW (primary) and the debug
+        # interface (secondary). We use an actual mux here instead of OR-ing to
+        # keep the debug port from disrupting execution.
         m.d.comb += [
             rf.write_cmd.valid.eq(
                 mux(
@@ -120,7 +166,10 @@ class Cpu(Component):
             self.debug.reg_write.ready.eq(s.halted),
         ]
 
-        # Manually combine the register file read ports.
+        # Combine the register file read ports from EW, FD, and debug. We OR
+        # the EW/FD ports together because those modules are well behaved, but
+        # explicitly gate signals from the debug port to only work when we're
+        # halted.
         m.d.comb += [
             rf.read_cmd.valid.eq(
                 fd.rf_cmd.valid | ew.rf_read_cmd.valid
@@ -133,13 +182,15 @@ class Cpu(Component):
             ew.rf_resp.eq(rf.read_resp),
             self.debug.reg_read.ready.eq(s.halted),
         ]
-        # Manually combine the bus access ports.
+        # Combine the bus access ports. The debug port can't drive our bus, so
+        # this is simpler.
         m.d.comb += [
             self.bus.cmd.valid.eq(
                 fd.bus.cmd.valid | ew.bus.cmd.valid
             ),
-            # Note that this will zero-extend the FD address if it's shorter
-            # than the full bus (because prog_addr_width is dialed back).
+            # Note that this will implicitly zero-extend the FD address if it's
+            # shorter than the full bus (because prog_addr_width is dialed
+            # back).
             self.bus.cmd.payload.addr.eq(
                 fd.bus.cmd.payload.addr | ew.bus.cmd.payload.addr
             ),
@@ -152,15 +203,6 @@ class Cpu(Component):
 
             fd.bus.resp.eq(self.bus.resp),
             ew.bus.resp.eq(self.bus.resp),
-        ]
-
-        # Extra debug wiring
-        m.d.comb += [
-            self.debug.pc.eq(Cat(0, 0, ew.pc)),
-            self.debug.pc_write.ready.eq(ew.debug_pc_write.ready),
-
-            ew.debug_pc_write.valid.eq(self.debug.pc_write.valid),
-            ew.debug_pc_write.payload.eq(self.debug.pc_write.payload),
         ]
 
         return m
