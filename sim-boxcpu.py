@@ -705,6 +705,18 @@ if __name__ == "__main__":
                 },
             )
 
+        for amt in [0, 1, 5, 31, 32]:
+            yield from test_inst(
+                f"SRLI x1, x2, {amt}",
+                0b0000000_00000_00010_101_00001_0010011 | ((amt & 0x1F) << 20),
+                before={
+                    2: 0xCAFEBABE,
+                },
+                after={
+                    1: 0xCAFEBABE >> (amt & 0x1F),
+                },
+            )
+
         for x2 in [0xCAFEBABE, 0xF00D]: # one negative, one positive
             for amt in [0, 1, 5, 31, 32]:
                 if x2 & 0x80000000 == 0:
