@@ -152,10 +152,11 @@ class TransmitCore(Component):
 class OversampleClock(Component):
     out: Out(1)
 
-    def __init__(self, baud_rate = 19200, oversample = 16):
+    def __init__(self, baud_rate = 19200, oversample = 16, clock_freq = None):
         super().__init__()
         self.baud_rate = baud_rate
         self.oversample = oversample
+        self.clock_freq = clock_freq
 
     def elaborate(self, platform):
         m = Module()
@@ -165,14 +166,14 @@ class OversampleClock(Component):
         # (where we could divide the clock all the way down to the baud rate
         # without issue) and accurate receive (where higher sampling rates are
         # better but cost more flops).
-        clock_freq = self.baud_rate * self.oversample
-        divisor = int(platform.default_clk_frequency // clock_freq)
-        print(f"UART configured for {self.baud_rate} from input clock {platform.default_clk_frequency}, divisor = {divisor}")
-        actual_freq = platform.default_clk_frequency / self.oversample / divisor
+        clock_freq = self.clock_freq or platform.default_clk_frequency
+        our_freq = self.baud_rate * self.oversample
+        divisor = int(clock_freq // our_freq)
+        print(f"UART configured for {self.baud_rate} from input clock {clock_freq}, divisor = {divisor}")
+        actual_freq = clock_freq / self.oversample / divisor
         print(f"Actual baud rate will be: {actual_freq}")
         assert abs(actual_freq - self.baud_rate) / self.baud_rate < 0.01, \
                 "Error: cannot achieve requested UART frequency"
-
 
         sample_clock = Signal(1)
         sample_counter = Signal(range(divisor))
@@ -196,17 +197,19 @@ class TransmitOnlyUart(Component):
     bus: In(BusPort(addr = 0, data = 16))
     tx: Out(1)
 
-    def __init__(self, baud_rate = 19200, oversample = 16):
+    def __init__(self, baud_rate = 19200, oversample = 16, clock_freq = None):
         super().__init__()
 
         self.baud_rate = baud_rate
         self.oversample = oversample
+        self.clock_freq = clock_freq
 
     def elaborate(self, platform):
         m = Module()
         m.submodules.clkdiv = clkdiv = OversampleClock(
             baud_rate = self.baud_rate,
             oversample = self.oversample,
+            clock_freq = self.clock_freq,
         )
 
         m.submodules.txr = txr = TransmitCore(oversample = self.oversample)
@@ -237,10 +240,11 @@ class ReceiveOnlyUart(Component):
     bus: In(BusPort(addr = 0, data = 16))
     rx: In(1)
 
-    def __init__(self, baud_rate = 19200):
+    def __init__(self, baud_rate = 19200, oversample = 16, clock_freq = None):
         super().__init__()
 
         self.baud_rate = baud_rate
+        self.clock_freq = clock_freq
 
     def elaborate(self, platform):
         m = Module()
@@ -248,6 +252,7 @@ class ReceiveOnlyUart(Component):
         m.submodules.clkdiv = clkdiv = OversampleClock(
             baud_rate = self.baud_rate,
             oversample = self.oversample,
+            clock_freq = self.clock_freq,
         )
 
         m.submodules.rxr = rxr = ReceiveCore(oversample = self.oversample)
@@ -281,11 +286,12 @@ class BidiUart(Component):
     tx: In(1)
     rx: In(1)
 
-    def __init__(self, baud_rate = 19200, oversample = 16):
+    def __init__(self, baud_rate = 19200, oversample = 16, clock_freq = None):
         super().__init__()
 
         self.baud_rate = baud_rate
         self.oversample = oversample
+        self.clock_freq = clock_freq
 
     def elaborate(self, platform):
         m = Module()
@@ -294,6 +300,7 @@ class BidiUart(Component):
         m.submodules.clkdiv = clkdiv = OversampleClock(
             baud_rate = self.baud_rate,
             oversample = self.oversample,
+            clock_freq = self.clock_freq,
         )
 
         # Receive state machine.
