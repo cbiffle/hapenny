@@ -26,7 +26,7 @@ DebugPort = Signature({
     'reg_value': In(16),
     # Register write command. Works roughly like reg_read, e.g. only READY when
     # the CPU is halted.
-    'reg_write': Out(StreamSig(RegWrite)),
+    'reg_write': Out(StreamSig(RegWrite(7))),
     # PC output from CPU. This is always valid. If the CPU's PC is narrower
     # than 32 bits (the prog_addr_width parameter) then its value is
     # zero-extended on this port.
@@ -92,7 +92,7 @@ class Cpu(Component):
         self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         self.s = SBox()
-        self.rf = RegFile16()
+        self.rf = RegFile16(banks = 2)
         self.fd = FDBox(
             prog_addr_width = self.prog_addr_width,
         )

@@ -91,7 +91,7 @@ class EWBox(Component):
     inst_next: In(32)
     ctx_next: Out(1)
     from_the_top: Out(1)
-    rf_write_cmd: Out(AlwaysReady(RegWrite))
+    rf_write_cmd: Out(AlwaysReady(RegWrite(7)))
     full: Out(1)
     hold: Out(1)
 
