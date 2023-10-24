@@ -168,12 +168,12 @@ class OversampleClock(Component):
         # better but cost more flops).
         clock_freq = self.clock_freq or platform.default_clk_frequency
         our_freq = self.baud_rate * self.oversample
-        divisor = int(clock_freq // our_freq)
+        divisor = int(round(clock_freq / our_freq))
         print(f"UART configured for {self.baud_rate} from input clock {clock_freq}, divisor = {divisor}")
         actual_freq = clock_freq / self.oversample / divisor
-        print(f"Actual baud rate will be: {actual_freq}")
-        assert abs(actual_freq - self.baud_rate) / self.baud_rate < 0.01, \
-                "Error: cannot achieve requested UART frequency"
+        freq_error = abs(actual_freq - self.baud_rate) / self.baud_rate
+        print(f"Actual baud rate will be: {actual_freq} (error: {freq_error * 100:.3}%)")
+        assert freq_error< 0.01, "Error: cannot achieve requested UART frequency"
 
         sample_clock = Signal(1)
         sample_counter = Signal(range(divisor))
