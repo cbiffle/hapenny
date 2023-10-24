@@ -8,11 +8,11 @@ from amaranth.lib.wiring import *
 from amaranth.build import ResourceError, Resource, Pins, Attrs
 from amaranth_boards.test.blinky import Blinky
 from amaranth_boards.icestick import ICEStickPlatform
+import amaranth.lib.cdc
 
 from hapenny import StreamSig
 from hapenny.boxcpu import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
-from hapenny.gpio import OutputPort
 from hapenny.serial import BidiUart
 from hapenny.mem import BasicMemory
 
@@ -70,11 +70,17 @@ class Test(Elaboratable):
         connect(m, cpu.bus, fabric.bus)
 
         uartpins = platform.request("uart", 0)
-        rxreg = Signal(reset = 1)
-        m.d.sync += rxreg.eq(uartpins.rx.i)
+        rx_post_sync = Signal()
+        m.submodules.rxsync = amaranth.lib.cdc.FFSynchronizer(
+            i = uartpins.rx.i,
+            o = rx_post_sync,
+            o_domain = "sync",
+            reset = 1,
+            stages = 2,
+        )
         m.d.comb += [
             uartpins.tx.o.eq(uart.tx),
-            uart.rx.eq(rxreg),
+            uart.rx.eq(rx_post_sync),
         ]
 
         return m
