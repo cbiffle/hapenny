@@ -199,7 +199,7 @@ def test_inst(name, inst, *, before = {}, after = {}, stop_at = None):
                 actual = yield from read_reg(key)
                 if value is not None:
                     assert actual == value, \
-                            f"r{key} should be 0x{value:x} but is 0x{actual:x}"
+                            f"r{key} should be 0x{value:08x} but is 0x{actual:08x}"
                 else:
                     print(f"r{key} (unconstrained) is 0x{actual:x}")
             elif isinstance(key, str) and key[0] == '@':
