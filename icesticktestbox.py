@@ -88,7 +88,10 @@ class Test(Elaboratable):
         )
         m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
                                              contents = boot_image)
+        # Set the UART for 8x oversample instead of the default 16, to save some
+        # logic.
         m.submodules.uart = uart = BidiUart(baud_rate = 115_200,
+                                            oversample = 8,
                                             clock_freq = F)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
