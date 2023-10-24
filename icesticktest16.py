@@ -39,7 +39,8 @@ class Test(Elaboratable):
         )
         m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
                                              contents = boot_image)
-        m.submodules.uart = uart = BidiUart(baud_rate = 115_200)
+        m.submodules.uart = uart = BidiUart(baud_rate = 115_200,
+                                            oversample = 8)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
             partial_decode(m, uart.bus, RAM_ADDR_BITS),
@@ -69,4 +70,4 @@ args = parser.parse_args()
 
 p = ICEStickPlatform()
 p.resources["irq", 0] = Resource("irq", 0, Pins("78", dir="i"), Attrs(IO_STANDARD="SB_LVCMOS"))
-p.build(Test(has_interrupt = args.interrupt_model))
+p.build(Test(has_interrupt = args.interrupt_model), do_program = True)
