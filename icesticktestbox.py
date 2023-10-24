@@ -30,6 +30,25 @@ class Test(Elaboratable):
 
     def elaborate(self, platform):
         m = Module()
+
+        cd_sync = ClockDomain("sync")
+        m.domains += cd_sync
+
+        platform.add_clock_constraint(cd_sync.clk, 72e6)
+
+        m.submodules.pll = Instance(
+            "SB_PLL40_CORE",
+            p_FEEDBACK_PATH = "SIMPLE",
+            p_DIVR = 0,
+            p_DIVF = 47,
+            p_DIVQ = 3,
+            p_FILTER_RANGE = 1,
+
+            i_REFERENCECLK = platform.request("clk12", dir = "-").io,
+            i_RESETB = 1,
+            o_PLLOUTGLOBAL = cd_sync.clk,
+        )
+
         m.submodules.cpu = cpu = Cpu(
             # +1 to adjust from bus halfword addressing to CPU byte addressing.
             addr_width = BUS_ADDR_BITS + 1,
@@ -41,7 +60,8 @@ class Test(Elaboratable):
         )
         m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
                                              contents = boot_image)
-        m.submodules.uart = uart = BidiUart(baud_rate = 19_200)
+        m.submodules.uart = uart = BidiUart(baud_rate = 115_200,
+                                            clock_freq = 72e6)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
             partial_decode(m, uart.bus, RAM_ADDR_BITS),
