@@ -71,7 +71,7 @@ class Test(Elaboratable):
 
         uartpins = platform.request("uart", 0)
         rxreg = Signal(reset = 1)
-        m.d.comb += rxreg.eq(uartpins.rx.i)
+        m.d.sync += rxreg.eq(uartpins.rx.i)
         m.d.comb += [
             uartpins.tx.o.eq(uart.tx),
             uart.rx.eq(rxreg),
