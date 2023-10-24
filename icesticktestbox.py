@@ -41,7 +41,7 @@ class Test(Elaboratable):
         )
         m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
                                              contents = boot_image)
-        m.submodules.uart = uart = BidiUart(baud_rate = 115_200)
+        m.submodules.uart = uart = BidiUart(baud_rate = 19_200)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
             partial_decode(m, uart.bus, RAM_ADDR_BITS),
@@ -49,13 +49,15 @@ class Test(Elaboratable):
 
         connect(m, cpu.bus, fabric.bus)
 
-        uartport = platform.request("uart", 0)
+        uartpins = platform.request("uart", 0)
+        rxreg = Signal(reset = 1)
+        m.d.comb += rxreg.eq(uartpins.rx.i)
         m.d.comb += [
-            uartport.tx.o.eq(uart.tx),
-            uart.rx.eq(uartport.rx.i),
+            uartpins.tx.o.eq(uart.tx),
+            uart.rx.eq(rxreg),
         ]
 
         return m
 
 p = ICEStickPlatform()
-p.build(Test())
+p.build(Test(), do_program = True)
