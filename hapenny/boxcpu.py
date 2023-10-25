@@ -21,12 +21,12 @@ DebugPort = Signature({
     # and the register file is available for inspection. Debug probes should
     # place a register number on the payload signals and assert VALID; the
     # response will come on reg_value on the next cycle.
-    'reg_read': Out(StreamSig(7)),
+    'reg_read': Out(StreamSig(5 + 1)),
     # Value that was read from the reg_read port above.
     'reg_value': In(16),
     # Register write command. Works roughly like reg_read, e.g. only READY when
     # the CPU is halted.
-    'reg_write': Out(StreamSig(RegWrite(7))),
+    'reg_write': Out(StreamSig(RegWrite(5 + 1))),
     # PC output from CPU. This is always valid. If the CPU's PC is narrower
     # than 32 bits (the prog_addr_width parameter) then its value is
     # zero-extended on this port.
@@ -36,10 +36,6 @@ DebugPort = Signature({
     # fetched. If the PC is narrower than 32 bits (the prog_addr_width
     # parameter) then the higher bits in this path are ignored.
     'pc_write': Out(StreamSig(32)),
-    # Context output from CPU. Currently unused in this model.
-    'ctx': In(1),
-    # Context override signal. Currently unused in this model.
-    'ctx_write': Out(StreamSig(1)),
     # State output from CPU. This is a one-hot encoding of the CPU's internal
     # execution state, mostly intended for testbenches.
     'state': In(STATE_COUNT),
@@ -92,7 +88,7 @@ class Cpu(Component):
         self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         self.s = SBox()
-        self.rf = RegFile16(banks = 2)
+        self.rf = RegFile16()
         self.fd = FDBox(
             prog_addr_width = self.prog_addr_width,
         )
@@ -114,7 +110,6 @@ class Cpu(Component):
         m.d.comb += [
             fd.onehot_state.eq(s.onehot_state),
             fd.pc.eq(ew.pc_next),
-            fd.ctx.eq(ew.ctx_next),
             fd.from_the_top.eq(ew.from_the_top),
 
             ew.onehot_state.eq(s.onehot_state),

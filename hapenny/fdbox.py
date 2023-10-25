@@ -26,7 +26,6 @@ class FDBox(Component):
     ----------
     onehot_state (input): state input from the S-Box
     pc (input): program counter from EW-box.
-    ctx (input): context select bit from EW-box.
     rf_cmd (output): read command to the register file, intended to be OR'd.
     inst_next (output): instruction word for EW to use next time we restart
         from the top.
@@ -35,8 +34,7 @@ class FDBox(Component):
         cycle of the instruction. We use this to gate register reads.
     """
     onehot_state: In(STATE_COUNT)
-    ctx: In(1)
-    rf_cmd: Out(AlwaysReady(7))
+    rf_cmd: Out(AlwaysReady(6))
     inst_next: Out(32)
     from_the_top: In(1)
 

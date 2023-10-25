@@ -70,7 +70,6 @@ class EWBox(Component):
         a useful next-PC value here by the end of state 1 (ideally, earlier) to
         get a useful fetch done. We then need to hold that value through states
         1 and 2.
-    ctx_next (output): Context select to FD for fetch of next rs1
     from_the_top (output): signals S-Box to rewind state when asserted.
     rf_write_cmd (port): output to register file to write registers.
     full (output): indicates whether we're doing useful work. When we have a
@@ -86,12 +85,11 @@ class EWBox(Component):
         s-box to maintain it.
     """
     onehot_state: In(STATE_COUNT)
-    rf_read_cmd: Out(AlwaysReady(7))
+    rf_read_cmd: Out(AlwaysReady(6))
     rf_resp: In(16)
     inst_next: In(32)
-    ctx_next: Out(1)
     from_the_top: Out(1)
-    rf_write_cmd: Out(AlwaysReady(RegWrite(7)))
+    rf_write_cmd: Out(AlwaysReady(RegWrite(6)))
     full: Out(1)
     hold: Out(1)
 
