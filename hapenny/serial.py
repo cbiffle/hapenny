@@ -3,7 +3,7 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
-from hapenny import StreamSig, AlwaysReady, mux
+from hapenny import StreamSig, AlwaysReady, mux, oneof
 from hapenny.bus import BusPort
 
 class ReceiveCore(Component):
@@ -30,70 +30,43 @@ class ReceiveCore(Component):
             self.empty.eq(~have_data),
         ]
 
-        with m.If(self.read_strobe):
-            m.d.sync += have_data.eq(0)
+        m.d.sync += timer.eq(oneof([
+            # Set to delay half a bit period from initial negative edge.
+            (self.sample_clock & (state == 0), (self.oversample // 2) - 1),
+            # Count down in all other states until we reach 0.
+            (self.sample_clock & (state != 0) & (timer != 0), timer - 1),
+            # Once we reach 0, reset to a full bit time.
+            (self.sample_clock & (state != 0) & (timer == 0), self.oversample - 1),
+        ], default = timer))
 
-        with m.If(self.sample_clock):
-            with m.Switch(state):
-                with m.Case(0):
-                    with m.If(~self.rx):
-                        # Might be a start of frame!
-                        m.d.sync += [
-                            # Delay half a bit period.
-                            timer.eq((self.oversample // 2) - 1),
-                            # Go to next state.
-                            state.eq(1),
-                        ]
-                    # Otherwise, if rx is high, chill.
-                with m.Case(1):
-                    with m.If(timer == 0):
-                        # We've reached the start bit sampling point!
-                        with m.If(~self.rx):
-                            # RX is still low; let's do this.
-                            m.d.sync += [
-                                timer.eq(self.oversample - 1),
-                                bits_left.eq(7),
-                                state.eq(2),
-                            ]
-                        with m.Else():
-                            # Glitch!
-                            m.d.sync += state.eq(0)
-                    with m.Else():
-                        # We've not yet reached the sampling point.
-                        m.d.sync += timer.eq(timer - 1)
-                with m.Case(2):
-                    with m.If(timer == 0):
-                        # Sampling point!
-                        m.d.sync += [
-                            # Shift received bit in from MSB (because it's LSB first
-                            # order).
-                            self.rdr.eq(Cat(self.rdr[1:], self.rx)),
-                            # Reset the bit sampling timer.
-                            timer.eq(self.oversample - 1),
-                            # Decrement the bit counter.
-                            bits_left.eq(bits_left - 1),
-                        ]
-                        with m.If(bits_left == 0):
-                            # All done.
-                            m.d.sync += state.eq(3)
-                    with m.Else():
-                        # We've not yet reached the sampling point.
-                        m.d.sync += timer.eq(timer - 1)
-                with m.Case(3):
-                    with m.If(timer == 0):
-                        # Sampling point!
-                        m.d.sync += have_data.eq(1)
-                        with m.If(self.rx):
-                            # Line was high where we expected a stop bit!
-                            m.d.sync += have_data.eq(1)
-                        with m.Else():
-                            # Framing error
-                            m.d.sync += have_data.eq(0)
-                        # Either way, we're heading back to state 0.
-                        m.d.sync += state.eq(0)
-                    with m.Else():
-                        # We've not yet reached the sampling point.
-                        m.d.sync += timer.eq(timer - 1)
+        m.d.sync += state.eq(oneof([
+            # Leave state 0 if we see the falling edge.
+            (self.sample_clock & (state == 0), ~self.rx),
+            # If it's still low at the midpoint of the start bit, proceed.
+            # Otherwise, treat it as a glitch and reset.
+            (self.sample_clock & (state == 1) & (timer == 0), mux(~self.rx, 2, 0)),
+            # Automatically advance when we've done all the bits in state 2.
+            (self.sample_clock & (state == 2) & (timer == 0), mux(bits_left == 0, 3, 2)),
+            # Automatically advance at the end of the stop bit.
+            (self.sample_clock & (state == 3) & (timer == 0), 0),
+        ], default = state))
+
+        m.d.sync += bits_left.eq(oneof([
+            # Configure for 7 bits after the first one.
+            (self.sample_clock & (timer == 0), mux(state == 1, 7, bits_left - 1)),
+        ], default = bits_left))
+
+        m.d.sync += self.rdr.eq(oneof([
+            (self.sample_clock & (state == 2) & (timer == 0), Cat(self.rdr[1:], self.rx)),
+        ], default = self.rdr))
+
+        m.d.sync += have_data.eq(oneof([
+            # The way this is expressed, newly arriving data will override the
+            # read strobe -- the two cases will OR if they occur
+            # simultaneously, and the 0 loses.
+            (self.sample_clock & (state == 3) & (timer == 0), self.rx),
+            (self.read_strobe, 0),
+        ], default = have_data))
 
         return m
 
@@ -115,7 +88,7 @@ class TransmitCore(Component):
         # We use this as a shift register containing: start bit, 8 data bits, 2
         # stop bits. Its LSB is our output state, so it's important that it
         # reset to 1; the other bits can reset to whatever value.
-        thr = Signal(1 + 8 + 2, reset = 1)
+        thr = Signal(1 + 8, reset = 1)
 
         tx_bits_left = Signal(range(1 + 8 + 2))
         tx_timer = Signal(range(self.oversample))
@@ -139,9 +112,8 @@ class TransmitCore(Component):
 
         with m.If(self.thr_write.valid):
             m.d.sync += [
-                # Load THR with the start bit and stop bits in addition to
-                # the byte being written.
-                thr.eq(Cat(0, self.thr_write.payload, 1, 1)),
+                # Load THR with the start bit.
+                thr.eq(Cat(0, self.thr_write.payload)),
                 tx_bits_left.eq(1 + 8 + 2),
                 tx_timer.eq(self.oversample - 1),
             ]
@@ -179,10 +151,8 @@ class OversampleClock(Component):
         sample_counter = Signal(range(divisor))
         # Generate a pulse on every sample period for one (fast) clock cycle.
         m.d.comb += self.out.eq(sample_counter == 0)
-        with m.If(self.out):
-            m.d.sync += sample_counter.eq(divisor - 1)
-        with m.Else():
-            m.d.sync += sample_counter.eq(sample_counter - 1)
+
+        m.d.sync += sample_counter.eq(mux(self.out, divisor - 1, sample_counter - 1))
 
         return m
 
@@ -259,10 +229,8 @@ class ReceiveOnlyUart(Component):
         m.d.comb += [
             rxr.rx.eq(self.rx),
             rxr.sample_clock.eq(clkdiv.out),
+            rxr.read_strobe.eq(self.bus.cmd.valid & ~self.bus.cmd.payload.lanes.any()),
         ]
-
-        with m.If(self.bus.cmd.valid & ~self.bus.cmd.payload.lanes.any()):
-            m.d.comb += rxr.read_strobe.eq(1)
 
         m.d.sync += [
             self.bus.resp[:8].eq(rxr.rdr),
@@ -333,17 +301,20 @@ class BidiUart(Component):
         ]
 
         # Read-sense logic for receive side.
-        with m.If(self.bus.cmd.valid & ~self.bus.cmd.payload.lanes.any()):
-            with m.If(~self.bus.cmd.payload.addr[0]):
-                # RDR is being read.
-                m.d.comb += rxr.read_strobe.eq(1)
+        m.d.comb += rxr.read_strobe.eq(
+            self.bus.cmd.valid
+            & ~self.bus.cmd.payload.lanes.any()
+            & ~self.bus.cmd.payload.addr[0]
+        )
 
         # Write logic for TX side.
         m.d.comb += txr.thr_write.payload.eq(self.bus.cmd.payload.data[:8])
 
-        with m.If(self.bus.cmd.valid & self.bus.cmd.payload.lanes[0]):
-            with m.If(self.bus.cmd.payload.addr[0]):
-                m.d.comb += txr.thr_write.valid.eq(1)
+        m.d.comb += txr.thr_write.valid.eq(
+            self.bus.cmd.valid
+            & self.bus.cmd.payload.lanes[0]
+            & self.bus.cmd.payload.addr[0]
+        )
 
         return m
 
