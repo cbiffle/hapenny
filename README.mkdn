@@ -14,17 +14,17 @@ overengineered fast version (`boxcpu`).
 
 ## Bullet points
 
-- Gets about 10 32-bit MIPS on an iCE40 HX1K. (About twice that on an ECP5.)
-    - The newer `boxcpu` version improves that by 60%.
-- A basic SoC with tiny RAM takes only 60% of an HX1K. (Or ~1% of an ECP5.)
-    - The newer version is a bit larger.
+- 8.2M inst/sec (smallest version) to 13.3M inst/sec (larger) on iCE40 HX1K.
+- A basic SoC with tiny RAM takes 59% of an HX1K. (Or ~1% of an ECP5.)
+    - The faster revision of the CPU takes 63% but produces 62% higher
+      throughput.
 - 16-bit external bus saves space for simple peripherals and RAMs.
 - Parameterized address bus width can be adjusted for your system.
+    - The newer revision can also have its program counter shrunk to smaller
+      than the address bus to save space if program memory is mapped low.
 - Implements the RV32I unprivileged instruction set (currently missing FENCE and
   SYSTEM).
-- Optional interrupt support using standard M-mode-style interrupts, or a novel
-  fast interrupt mechanism offering much better response times in less area.
-    - (boxcpu does not implement interrupts yet, cpu16 does.)
+- Optional interrupt support in the older core. (yet to come in the revised one)
 - Written in Python using Amaranth.
 
 ## But why
@@ -40,15 +40,16 @@ an iCE40 HX1K part (like on the Icestick evaluation board) with enough space
 left over for useful logic. PicoRV32 doesn't quite fit on that chip; SERV fits
 but takes 32-64 cycles per instruction.
 
-| Property | PicoRV32-small | `hapenny` | SERV |
-| -------- | -------- | --------- | ---- |
-| Datapath width (bits) | 32 | **16** | 1 |
-| External data bus width | 32 | **16** | 32 |
-| Average cycles per instruction | 5-ish | **5-ish** | 40-ish |
-| Minimal size on iCE40 (LCs) | 1500-ish | **758** | 200-ish |
-| Typical MHz on iCE40 | 40s? | **78** | 40s? |
+| Property | PicoRV32-small | `hapenny` 2 |`hapenny` 1 | SERV |
+| -------- | -------------- | ----------- | ---------- | ---- |
+| Datapath width (bits) | 32 | **16** | **16** | 1 |
+| External data bus width | 32 | **16** | **16** | 32 |
+| Average cycles per instruction | 5-ish | **5.619** | **8.033** | 40-ish |
+| Minimal size on iCE40 (LCs) | 1500-ish | **811** | **760** | 200-ish |
+| Typical MHz on iCE40 | 40s? | **75** | **66** | 40s? |
 
-(I would appreciate help getting apples-to-apples comparison numbers!)
+(Cycles/instruction is measured on Dhrystone. I would appreciate help getting
+apples-to-apples comparison numbers!)
 
 So, basically, `hapenny` is smaller than a similarly-configured PicoRV32 and
 faster than SERV, if that's useful to you.
