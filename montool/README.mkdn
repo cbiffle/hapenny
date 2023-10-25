@@ -1,0 +1,8 @@
+# hapenny montool
+
+This is a very basic command line tool for interacting with the tinyboot serial
+monitor.
+
+For instructions:
+
+`cargo run -- --help`

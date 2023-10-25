@@ -1,0 +1,12 @@
+[package]
+name = "hapenny-montool"
+version = "1.0.0"
+edition = "2021"
+license = "MPL-2"
+
+[dependencies]
+anyhow = "1.0.71"
+clap = { version = "4.3.4", features = ["derive", "wrap_help"] }
+indicatif = "0.17.5"
+parse_int = "0.6.0"
+serialport = "4.2.1"
