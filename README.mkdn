@@ -111,8 +111,8 @@ currently stand:
 | Other ALU op | 7 | |
 | CSR ops | 8 | (if enabled) |
 
-This is why I describe the cycles-per-instruction as "7-ish." The precise
-throughput will depend on your program.
+On the instruction mix in Dhrystone, this yields an average of 8.033
+cycles/instruction.
 
 # Details (new version)
 
@@ -136,6 +136,9 @@ at the cost of a small increase in area.
 | SLT(I)(U) | 6 | |
 | Shift | 6 + N | N is number of bits shifted |
 | Other ALU op | 4 | |
+
+On the instruction mix in Dhrystone, this yields an average of 5.619
+cycles/instruction.
 
 ## Interfaces
 
