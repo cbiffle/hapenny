@@ -9,16 +9,22 @@ the original MC68000 in cycles-per-instruction, in fact.)
 
 `hapenny` was written to evaluate the Amaranth HDL.
 
+There are currently two CPU designs in this repo, the original (`cpu16`) and an
+overengineered fast version (`boxcpu`).
+
 ## Bullet points
 
 - Gets about 10 32-bit MIPS on an iCE40 HX1K. (About twice that on an ECP5.)
+    - The newer `boxcpu` version improves that by 60%.
 - A basic SoC with tiny RAM takes only 60% of an HX1K. (Or ~1% of an ECP5.)
+    - The newer version is a bit larger.
 - 16-bit external bus saves space for simple peripherals and RAMs.
 - Parameterized address bus width can be adjusted for your system.
 - Implements the RV32I unprivileged instruction set (currently missing FENCE and
   SYSTEM).
 - Optional interrupt support using standard M-mode-style interrupts, or a novel
   fast interrupt mechanism offering much better response times in less area.
+    - (boxcpu does not implement interrupts yet, cpu16 does.)
 - Written in Python using Amaranth.
 
 ## But why
@@ -38,22 +44,21 @@ but takes 32-64 cycles per instruction.
 | -------- | -------- | --------- | ---- |
 | Datapath width (bits) | 32 | **16** | 1 |
 | External data bus width | 32 | **16** | 32 |
-| Average cycles per instruction | 4-ish | **7-ish** | 40-ish |
+| Average cycles per instruction | 5-ish | **5-ish** | 40-ish |
 | Minimal size on iCE40 (LCs) | 1500-ish | **758** | 200-ish |
 | Typical MHz on iCE40 | 40s? | **78** | 40s? |
 
 (I would appreciate help getting apples-to-apples comparison numbers!)
 
-So, basically, PicoRV32 is higher performance, SERV is smaller, but if you need
-more instructions-per-clock than SERV without the size of PicoRV32... `hapenny`
-might be useful to you.
+So, basically, `hapenny` is smaller than a similarly-configured PicoRV32 and
+faster than SERV, if that's useful to you.
 
 Independent from the datapath width, I also did some fairly aggressive manual
 register retiming in the decoder and datapath, which means `hapenny` can often
 close timing at higher Fmax than other simple RV32 cores. (I miss automatic
 retiming from ASIC toolchains.)
 
-## Details
+## Details (old version)
 
 `hapenny` executes (most of) the RV32I instruction set in 16-bit pieces. It uses
 16-bit memory, a 16-bit register file, and a 16-bit ALU. To perform 32-bit
@@ -106,6 +111,14 @@ currently stand:
 This is why I describe the cycles-per-instruction as "7-ish." The precise
 throughput will depend on your program.
 
+# Details (new version)
+
+The new CPU is very similar, except it overlaps fetch and decode with execute
+and typically takes 40% fewer cycles to do things.
+
+It's also clocked a bit faster for an overall 60% performance improvement, at
+the cost of a 4% increase in area.
+
 ## Interfaces
 
 `hapenny` uses a very simple ready/valid bus interface with up to 32-bit
@@ -128,9 +141,9 @@ instruction boundary) by asserting `halted`. Release `halt_request` to resume.
 ## Interrupt options
 
 `hapenny` provides three interrupt implementation options of increasing cost.
-(Cycle counts here are worst-case assuming no wait-states. LC counts are using a
-simple system with an IRQ line wired to a pad, even in the No IRQ case, for
-consistency.)
+(Cycle counts here are worst-case assuming no wait-states. These designs do not
+currently support wait states to save space. LC counts are using a simple system
+with an IRQ line wired to a pad, even in the No IRQ case, for consistency.)
 
 | Mode | LCs | Entry cycles | Exit cycles |
 | ---- | --- | ------------ | ----------- |
