@@ -1,3 +1,5 @@
+from functools import reduce
+
 from amaranth import *
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
@@ -63,16 +65,12 @@ class SimpleFabric(Elaboratable):
         devid = Signal(self.extra_bits)
         m.d.comb += devid.eq(self.bus.cmd.payload.addr[self.addr_bits:])
 
-        # Stop expecting automatically after one cycle.
-        with m.If(expecting):
-            m.d.sync += expecting.eq(0)
-        # Record that we are expecting any time we see a load transaction.
-        with m.If(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0)):
-            m.d.sync += [
-                expecting.eq(1),
-                expecting_id.eq(devid),
-            ]
-
+        # Start expecting on any load transaction. Stop expecting otherwise.
+        m.d.sync += expecting.eq(self.bus.cmd.valid & (self.bus.cmd.payload.lanes == 0))
+        # We can update this unconditionally every cycle because (1) responses
+        # always come exactly one cycle after the request and (2) this ID is
+        # ignored if we're not expecting.
+        m.d.sync += expecting_id.eq(devid)
 
         for (i, d) in enumerate(self.devices):
             # Fan out the incoming address, data, and lanes to every device.
@@ -89,15 +87,12 @@ class SimpleFabric(Elaboratable):
             ]
 
         # Fan the response data in based on who we're listening to.
-        response_data = None
+        response_data = []
         for (i, d) in enumerate(self.devices):
             data = d.resp & (expecting & (expecting_id ==
                                                   i)).replicate(self.data_bits)
-            if response_data is None:
-                response_data = data
-            else:
-                response_data = response_data | data
+            response_data.append(data)
 
-        m.d.comb += self.bus.resp.eq(response_data)
+        m.d.comb += self.bus.resp.eq(reduce(lambda a, b: a | b, response_data))
 
         return m
