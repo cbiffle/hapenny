@@ -1,0 +1,112 @@
+# hapenny tinyboot
+
+This is a minimal boot ROM and monitor written in Rust. It interacts with a host
+over a serial port and provides operations for reading, writing, and calling
+memory.
+
+This is directly inspired by Frank Sergeant's "3-Instruction Forth;" like that
+system, this is not Forth.
+
+## Building
+
+`cargo build --release`
+
+This will generate an ELF file. Extracting a binary file suitable for handing to
+the SoC generator:
+
+```
+riscv32-elf-objcopy -Obinary \
+    target/riscv32i-unknown-none-elf/release/tinyboot \
+    path-to-your-output-file.bin
+```
+
+## Serial protocol
+
+All the default examples bring up the UART at 115,200 baud, though you can
+change this if you like -- it's in the HDL, not the Rust code.
+
+The protocol is a very simple command-response scheme implementing five
+commands. It's a binary protocol; examples below will be shown in hex, but
+typing hex digits into the serial port won't do what you want. See the `montool`
+in this same repo for a portable command line tool.
+
+### Call (0x00)
+
+Send: `00`
+Response: `AA`
+
+Calls the address in the A register. Loads the tinyboot setup routine's address
+into `ra` during the call, so if the code you call returns, it'll hop right back
+into tinyboot.
+
+### Write (0x01)
+
+Send: `01 nn nn nn nn ...`
+Response: `AA`
+
+Writes words to memory starting at the address in the A register and continuing
+for the count in the C register. Decrements the C register by 1 per word, and
+increments the A register by 4 per word.
+
+Words should be sent after the command byte in little-endian format.
+
+The ACK byte will arrive after all words have been transmitted.
+
+### Read (0x02)
+
+Send: `02`
+Response: `AA nn nn nn nn ...`
+
+Reads words from memory starting at the address in the A register and continuing
+for the count in the C register. Decrements the C register by one per word, and
+increments the A register by 4 per word.
+
+The ACK response is sent first, followed by the requested number of words in
+little-endian format.
+
+### Load A (0x03)
+
+Send: `03 ww xx yy zz`
+Response: `AA`
+
+Loads a new value into the A register. The value must be sent after the command
+byte in little-endian format (so in this example, the value loaded is
+`0xzzyyxxww`).
+
+### Load C (0x04)
+
+Send: `04 ww xx yy zz`
+Response: `AA`
+
+Loads a new value into the C register. The value must be sent after the command
+byte in little-endian format (so in this example, the value loaded is
+`0xzzyyxxww`).
+
+Note that the count held in the C register is always measured in _words,_ not
+bytes.
+
+### Ping (0x05)
+
+Send: `05`
+Response: `AA`
+
+Basic verification that the bootloader is responding.
+
+## Configuring for your board
+
+Currently we rely on Cargo features to adjust the UART location in the address
+space, which winds up being kind of gross, because you'll need to add a feature
+and a couple of lines of code for if your UART appears somewhere unusual.
+
+The implemented features are listed in `Cargo.toml` and are all named
+`uart-at-XXX` where `XXX` is a hex number.
+
+If not overridden, the build assumes the uart is at `0x0001_8000`, its location
+on the UPduino-Large example. To override, add `--no-default-features --feature
+uart-at-XXX` to the build command line, where `XXX` is the address you want.
+
+It'd probably be better to generate a linker script based on the SoC definition.
+Someday!
+
+**Note:** The linker script currently assumes that there is useful stack memory
+located _immediately below_ the location where tinyboot is loaded.
