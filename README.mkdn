@@ -72,7 +72,8 @@ which is another reason why operations take more cycles. The RV32I register file
 is comparatively large (at 1024 bits), and using a synchronous register file
 ensures that it can be mapped into an FPGA block RAM if desired.
 
-Here's what the CPU does during the timing of a typical instruction like `ADD`.
+Here's what the (original) CPU does during the timing of a typical instruction
+like `ADD`.
 
 ![A timing diagram showing a typical instruction cycle.](doc/instruction-cycle.svg)
 
@@ -116,10 +117,25 @@ throughput will depend on your program.
 # Details (new version)
 
 The new CPU is very similar, except it overlaps fetch and decode with execute
-and typically takes 40% fewer cycles to do things.
+and typically takes 40% fewer cycles to do things. It's also clocked a bit
+faster. These factors combine to get about 62% higher performance in practice,
+at the cost of a small increase in area.
 
-It's also clocked a bit faster for an overall 60% performance improvement, at
-the cost of a 4% increase in area.
+![A timing diagram showing a typical instruction cycle.](doc/instruction-cycle-2.svg)
+
+| Instruction | Cycles | Notes |
+| ----------- | ------ | ----- |
+| AUIPC | 4 | |
+| LUI | 4 | |
+| JAL | 8 | Includes four-cycle re-fetch penalty |
+| JALR | 8 | Includes four-cycle re-fetch penalty |
+| Branch | 5/10 | Not Taken / Taken |
+| Load | 6 | |
+| SW | 5 | |
+| SB/SH | 4 | |
+| SLT(I)(U) | 6 | |
+| Shift | 6 + N | N is number of bits shifted |
+| Other ALU op | 4 | |
 
 ## Interfaces
 
