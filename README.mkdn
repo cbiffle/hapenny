@@ -48,7 +48,8 @@ but takes 32-64 cycles per instruction.
 | Minimal size on iCE40 (LCs) | 1500-ish | **811** | **760** | 200-ish |
 | Typical MHz on iCE40 | 40s? | **75** | **66** | 40s? |
 
-(Cycles/instruction is measured on Dhrystone. I would appreciate help getting
+(Cycles/instruction is measured on Dhrystone. Minimal size is the output
+produced by the `icestick-smallest.py` script. I would appreciate help getting
 apples-to-apples comparison numbers!)
 
 So, basically, `hapenny` is smaller than a similarly-configured PicoRV32 and
