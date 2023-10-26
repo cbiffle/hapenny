@@ -1,0 +1,57 @@
+# Hacked up Dhrystone
+
+This is the classical Dhrystone benchmark, fitted with code to support a hapenny
+SoC. This code and the Makefile are derived from the PicoRV32 Dhrystone test
+bench, but further modified and simplified.
+
+By default, this builds an image compatible with the `upduino-large` example
+SoC. That's the only example currently in the repo that has enough RAM to run
+Dhrystone (you need at least 18 kiB).
+
+## Current results
+
+For the `upduino-large` SoC example using the newer (`box`) CPU revision:
+
+```
+Number_Of_Runs: 100
+User_Time: 214511 cycles, 38823 insn
+Cycles_Per_Instruction: 5.525
+Dhrystones_Per_Second_Per_MHz: 466
+DMIPS_Per_MHz: 0.265
+```
+
+
+## Building and running it
+
+First, make sure you have an SoC running `tinyboot` and a working serial cable.
+Your SoC should respond to the `ping` subcommand in `montool`.
+
+Build Dhrystone by running `make`. This will produce (among other things) a file
+called `dhry.bin`.
+
+Go into the `montool` directory and run
+
+```
+cargo run -q YOURPORT write 0 dhry.bin
+cargo run -q YOURPORT call 0 --then-echo
+```
+
+...where `YOURPORT` should be the name of the serial port on your system (e.g.
+`/dev/ttyUSB0` or `COM1:`) and `0` is the address to load. If that address isn't
+right for your SoC, see the next section.
+
+The `call` subcommand will activate Dhrystone and print its output to your
+terminal. Once it says `DONE`, it will appear to hang; just abort the command at
+this point. If you'd like to run it more than once, just `call` again.
+
+
+## Adapting to your SoC
+
+The Makefile's behavior can be customized by passing two variables:
+
+- `UARTADDR` is the address of the UART (default: 0x18000).
+- `STACK` is the initial stack pointer (default: 0x8000).
+
+If your program RAM is not at address 0, you'll need to modify the linker
+script.
+
