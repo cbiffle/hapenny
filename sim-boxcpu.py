@@ -239,7 +239,7 @@ def test_inst(name, inst, *, before = {}, after = {}, stop_at = None):
 
 if __name__ == "__main__":
     m = Module()
-    m.submodules.uut = uut = Cpu()
+    m.submodules.uut = uut = Cpu(counters = True)
     m.submodules.mem = mem = TestMemory([
         0b00000000000000000000_00000_1101111, # JAL x0, .
     ])

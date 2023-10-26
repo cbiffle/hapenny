@@ -77,6 +77,7 @@ class Cpu(Component):
     def __init__(self, *,
                  reset_vector = 0,
                  addr_width = 32,
+                 counters = False,
                  prog_addr_width = None):
         super().__init__()
 
@@ -96,6 +97,7 @@ class Cpu(Component):
             reset_vector = reset_vector,
             addr_width = addr_width,
             prog_addr_width = self.prog_addr_width,
+            counters = counters,
         )
 
     def elaborate(self, platform):

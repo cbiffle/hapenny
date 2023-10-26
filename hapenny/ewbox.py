@@ -99,6 +99,7 @@ class EWBox(Component):
                  reset_vector = 0,
                  addr_width = 32,
                  prog_addr_width = 32,
+                 counters = False,
                  ):
         super().__init__()
 
@@ -112,8 +113,14 @@ class EWBox(Component):
         self.accum = Signal(16)
         self.pc = Signal(prog_addr_width - 2, reset = reset_vector >> 2)
 
+        self.counters = counters
+
     def elaborate(self, platform):
         m = Module()
+
+        cycle_counter = Signal(32)
+        instret_counter = Signal(32)
+        csr_msbs = Signal(16)
 
         # Nested decoder bits
         m.submodules.dec = Decoder()
@@ -476,6 +483,28 @@ class EWBox(Component):
             ], default = self.full)),
         ]
 
+        # Maintaining the counters
+        if self.counters:
+            m.d.sync += [
+                cycle_counter.eq(cycle_counter + 1),
+                instret_counter.eq(mux(
+                    self.full & end_of_instruction,
+                    instret_counter + 1,
+                    instret_counter,
+                )),
+                # Latch the MSBs of the CSR during state 1 so that we write an
+                # atomic copy.
+                csr_msbs.eq(mux(
+                    self.onehot_state[1],
+                    mux(
+                        imm.i[1],
+                        hihalf(instret_counter),
+                        hihalf(cycle_counter),
+                    ),
+                    csr_msbs,
+                )),
+            ]
+
         # Load lane mixer.
         #
         # RV32 has relatively fancy load instructions, at least compared to its
@@ -533,7 +562,7 @@ class EWBox(Component):
         m.d.comb += [
             # When do we write? All writes gated on self.full.
             self.rf_write_cmd.valid.eq(self.full & onehot_choice(self.onehot_state, {
-                (1, 3): dec.writes_rd_normally,
+                (1, 3): dec.writes_rd_normally | (self.counters & dec.is_system),
                 # loads and SLTs write in state 4, stores and branches do not.
                 4: dec.is_load | dec.is_alu,
                 # loads and shifts write in state 5, stores and branches do not.
@@ -593,6 +622,11 @@ class EWBox(Component):
                     0b110: self.accum | adder_rhs,
                     # AND
                     0b111: self.accum & adder_rhs,
+                })),
+                (self.counters & dec.is_system, onehot_choice(self.onehot_state, {
+                    1: mux(imm.i[1], lohalf(instret_counter),
+                           lohalf(cycle_counter)),
+                    3: csr_msbs,
                 })),
             ])),
         ]
