@@ -44,8 +44,9 @@ class SimpleFabric(Elaboratable):
         data_bits = max(p.cmd.payload.data.shape().width for p in devices)
         addr_bits = max(p.cmd.payload.addr.shape().width for p in devices)
         sig = BusPort(addr = addr_bits, data = data_bits).flip()
-        for d in devices:
-            assert sig.is_compliant(d)
+        for i, d in enumerate(devices):
+            assert sig.is_compliant(d), \
+                    f"device #{i} does not have {addr_bits} addr bits: {d.cmd.payload.addr.shape()}"
         self.devices = devices
         self.extra_bits = (len(devices) - 1).bit_length()
         self.addr_bits = addr_bits
