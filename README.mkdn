@@ -44,7 +44,7 @@ but takes 32-64 cycles per instruction.
 | -------- | -------------- | ----------- | ---------- | ---- |
 | Datapath width (bits) | 32 | **16** | **16** | 1 |
 | External data bus width | 32 | **16** | **16** | 32 |
-| Average cycles per instruction | 5-ish | **5.619** | **8.033** | 40-ish |
+| Average cycles per instruction | 5-ish | **5.525** | **8.033** | 40-ish |
 | Minimal size on iCE40 (LCs) | 1500-ish | **811** | **760** | 200-ish |
 | Typical MHz on iCE40 | 40s? | **75** | **66** | 40s? |
 
@@ -52,8 +52,9 @@ but takes 32-64 cycles per instruction.
 produced by the `icestick-smallest.py` script. I would appreciate help getting
 apples-to-apples comparison numbers!)
 
-So, basically, `hapenny` is smaller than a similarly-configured PicoRV32 and
-faster than SERV, if that's useful to you.
+So, basically, `hapenny` is smaller (but less general) than a
+similarly-configured PicoRV32 and faster (but larger) than SERV, if that's
+useful to you.
 
 Independent from the datapath width, I also did some fairly aggressive manual
 register retiming in the decoder and datapath, which means `hapenny` can often
@@ -248,8 +249,8 @@ in my simple tests.
 
 - Used for exactly one thing so far, so not exactly battle-hardened.
 
-- Lower performance, clock-for-clock, than more mature implementations like
-  PicoRV32.
+- Less general than more mature implementations like PicoRV32 -- e.g. no support
+  for wait states, hardware multiply, coprocessors.
 
 - 16-bit external data bus means that, currently, 32-bit reads/writes are not
   atomic -- a problem when interfacing with peripherals with 32-bit

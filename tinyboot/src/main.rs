@@ -101,6 +101,9 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "uart-at-00000400")] {
         const UARTRX: *mut i16 = 0x400 as _;
         const UARTTX: *mut u16 = 0x402 as _;
+    } else if #[cfg(feature = "uart-at-00009000")] {
+        const UARTRX: *mut i16 = 0x09000 as _;
+        const UARTTX: *mut u16 = 0x09002 as _;
     } else if #[cfg(feature = "uart-at-00018000")] {
         const UARTRX: *mut i16 = 0x18000 as _;
         const UARTTX: *mut u16 = 0x18002 as _;

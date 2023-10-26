@@ -4,6 +4,9 @@ This is the classical Dhrystone benchmark, fitted with code to support a hapenny
 SoC. This code and the Makefile are derived from the PicoRV32 Dhrystone test
 bench, but further modified and simplified.
 
+The Dhrystone sources appear to be in the public domain. I've borrowed those
+bits and left the non-public-domain bits from PicoRV32 behind, as far as I know.
+
 By default, this builds an image compatible with the `upduino-large` example
 SoC. That's the only example currently in the repo that has enough RAM to run
 Dhrystone (you need at least 18 kiB).
