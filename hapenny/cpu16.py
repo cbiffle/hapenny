@@ -62,6 +62,7 @@ class Cpu(Component):
     def __init__(self, *,
                  addr_width = 32,
                  has_interrupt = None,
+                 reset_vector = 0,
                  relax_instruction_alignment = False):
         super().__init__()
 
@@ -85,7 +86,7 @@ class Cpu(Component):
 
         self.ustate = Signal(UState, reset = UState.RESET) # TODO
         self.hi = Signal(1)
-        self.pc = Array(Signal(addr_width - 1) for _ in range(self.npcs))
+        self.pc = Array(Signal(addr_width - 1, reset = reset_vector >> 1) for _ in range(self.npcs))
         self.inst = Signal(32)
 
         self.accum = Signal(16)
