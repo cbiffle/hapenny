@@ -84,8 +84,8 @@ class Test(Elaboratable):
         m.d.comb += ResetSignal("sync").eq(~por_ready)
 
         if self.new_model:
-            F = 75e6 # Hz
-            pll_f, pll_q = 49, 3
+            F = 66e6 # Hz
+            pll_f, pll_q = 87, 4
         else:
             F = 66e6 # Hz
             pll_f, pll_q = 87, 4
