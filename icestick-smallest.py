@@ -9,6 +9,7 @@
 # isn't so simple that it optimizes away in synthesis.
 
 import itertools
+from functools import reduce
 import argparse
 import struct
 from pathlib import Path
@@ -28,7 +29,19 @@ from hapenny.gpio import OutputPort
 from hapenny.mem import BasicMemory
 
 bootloader = Path("smallest-toggle.bin").read_bytes()
-boot_image = struct.unpack("<" + "h" * (len(bootloader) // 2), bootloader)
+boot_image = struct.unpack("<" + "H" * (len(bootloader) // 2), bootloader)
+
+image_or = reduce(lambda a, b: a|b, boot_image)
+image_and = reduce(lambda a, b: a&b, boot_image)
+
+problems = set(b for b in range(16)
+                 if image_or & (1 << b) == 0
+                 or image_and & (1 << b) != 0)
+
+if problems:
+    print("WARNING: contents of boot ROM may cause logic to be optimized out.")
+    print("Size estimates generated from such an image would be misleading.")
+    print(f"The following bit positions are constant: {problems}")
 
 # the blinky program does not use RAM at all, so we can fit it in a single block RAM.
 RAM_WORDS = 256 * 1
