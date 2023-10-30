@@ -57,12 +57,16 @@ class ExternalSRAM(Component):
         r_data_to_sram = Signal(16)
         r_lanes = Signal(2)
         r_write = Signal()
+        r_read = Signal()
 
         # Automatically clear any write request on the cycle after it occurs, so
         # that we don't sit there repeatedly writing from this interface while
         # the CPU is off doing other things.
         with m.If(r_write):
-            m.d.sync += r_write.eq(0)
+            m.d.sync += [
+                r_write.eq(0),
+                r_read.eq(0),
+            ]
        
         # Copy any bus transaction into the registers. This will override the
         # clearing above.
@@ -71,6 +75,7 @@ class ExternalSRAM(Component):
                 r_addr.eq(self.bus.cmd.payload.addr),
                 r_data_to_sram.eq(self.bus.cmd.payload.data),
                 r_write.eq(self.bus.cmd.payload.lanes.any()),
+                r_read.eq(~self.bus.cmd.payload.lanes.any()),
                 # Our bus doesn't use lane signals on read. The external bus
                 # does. Convert.
                 r_lanes.eq(self.bus.cmd.payload.lanes
@@ -87,7 +92,7 @@ class ExternalSRAM(Component):
             # writing. Conversely, deassert it on write cycles. The phase
             # offset of our write-enable output gives the drivers time to turn
             # off.
-            self.sram_oe.eq(~r_write),
+            self.sram_oe.eq(r_read),
             # Combine our write enable (active high) with the incoming
             # phase-shifted clock to generate a write pulse in the center of
             # each write cycle.
