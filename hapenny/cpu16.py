@@ -24,7 +24,7 @@ DebugPort = Signature({
     'ctx_write': In(StreamSig(1)),
 })
 
-class UState(Enum):
+class UState(Enum, shape=unsigned(4)):
     RESET = 0 # TODO remove me
     FETCH = 1
     INST_REG1_LO = 2
