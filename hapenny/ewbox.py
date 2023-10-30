@@ -165,33 +165,35 @@ class EWBox(Component):
         m.d.comb += [
             # Adder RHS operand selection. We choose the "positive" version of
             # the operand here and potentially complement it below.
-            adder_rhs_pos.eq(onehot_choice(self.onehot_state, {
-                # Operate states:
-                (1, 3): oneof([
-                    # Register for things like ALU reg-reg instructions, but
-                    # also for branches to perform the compare:
-                    (dec.is_any_reg_to_adder, self.rf_resp),
-                    # The various immediates:
-                    (dec.is_auipc_or_lui,
-                     choosehalf(self.onehot_state[3], imm.u)),
-                    (dec.is_jal,
-                     choosehalf(self.onehot_state[3], imm.j)),
-                    (dec.is_any_imm_i,
-                     choosehalf(self.onehot_state[3], imm.i)),
-                    (dec.is_store,
-                     choosehalf(self.onehot_state[3], imm.s)),
-                ]),
-                # TODO: this could likely be folded into the mux above
-                4: oneof([
-                    (dec.is_load, hihalf(imm.i)),
-                    (dec.is_store, hihalf(imm.s)),
-                ], default = lohalf(imm.b)),
-                5: hihalf(imm.b),
-            })),
+            #
+            # This mux has to be state sensitive, beyond simply choosing top or
+            # bottom half of an operand, because of branches. Branches are the
+            # only operation that perform two independent additions: first a
+            # comparison, then a branch target calculation.
+            adder_rhs_pos.eq(oneof([
+                # Register, for ALU reg-reg. This is the easiest case since
+                # the halfword is implicitly chosen by the register file
+                # access.
+                (dec.is_alu_rr, self.rf_resp),
+                # Branches require nuanced handling.
+                (dec.is_b, onehot_choice(self.onehot_state, {
+                    4: lohalf(imm.b),
+                    5: hihalf(imm.b),
+                }, default = self.rf_resp)),
+                # The various immediates:
+                (dec.is_auipc_or_lui,
+                 choosehalf(self.onehot_state[3], imm.u)),
+                (dec.is_jal,
+                 choosehalf(self.onehot_state[3], imm.j)),
+                (dec.is_any_imm_i,
+                 choosehalf(self.onehot_state[3] | self.onehot_state[4], imm.i)),
+                (dec.is_store,
+                 choosehalf(self.onehot_state[3] | self.onehot_state[4], imm.s)),
+            ])),
             # Generate the final adder_rhs value by conditionally complementing
             # in operate states. (We limit this to operate states to avoid
             # complementing the branch displacement used to compute
-            # destinations in states 4/5.
+            # destinations in states 4/5.)
             adder_rhs.eq(mux(
                 dec.is_adder_rhs_complemented & (self.onehot_state[1] | self.onehot_state[3]),
                 ~adder_rhs_pos,
