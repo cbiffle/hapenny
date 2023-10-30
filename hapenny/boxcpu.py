@@ -8,11 +8,12 @@ import amaranth.lib.coding
 from hapenny import StreamSig, AlwaysReady, csr16, mux, oneof, onehot_choice
 from hapenny.decoder import ImmediateDecoder, Decoder, DecodeSignals
 from hapenny.regfile16 import RegFile16, RegWrite
-from hapenny.bus import BusPort
+from hapenny.bus import BusPort, BusCmd
 from hapenny.csr16 import CsrFile16, CsrReg
 from hapenny.sbox import SBox, STATE_COUNT
 from hapenny.fdbox import FDBox
 from hapenny.ewbox import EWBox
+from hapenny.rvfi import Rvfi, Mode, Ixl
 
 # Note: all debug port signals are directional from the perspective of the DEBUG
 # PROBE, not the CPU.
@@ -68,11 +69,13 @@ class Cpu(Component):
     halt_request (in): when asserted (1), requests that the CPU stop at the
         next instruction boundary. Release (0) to resume.
     halted (out): raised when the CPU has halted.
+    rvfi (out): RISC-V Formal Interface trace port.
     """
     halt_request: In(1)
     halted: Out(1)
 
     debug: In(DebugPort)
+    rvfi: Out(AlwaysReady(Rvfi()))
 
     def __init__(self, *,
                  reset_vector = 0,
@@ -201,5 +204,213 @@ class Cpu(Component):
             fd.bus.resp.eq(self.bus.resp),
             ew.bus.resp.eq(self.bus.resp),
         ]
+
+        # Trace port
+        m.submodules.rvfi_adapter = rvfi = RvfiPort()
+        m.d.comb += [
+            rvfi.state.eq(s.onehot_state),
+            rvfi.full.eq(ew.full),
+            rvfi.end_of_instruction.eq(ew.from_the_top),
+            rvfi.pc.eq(Cat(0, 0, ew.pc)),
+            rvfi.pc_next.eq(Cat(0, 0, ew.pc_next)),
+            rvfi.insn.eq(ew.debug_inst),
+            rvfi.rf_read_resp_snoop.eq(rf.read_resp),
+
+            rvfi.rf_read_snoop.valid.eq(rf.read_cmd.valid),
+            rvfi.rf_read_snoop.payload.eq(rf.read_cmd.payload),
+
+            rvfi.rf_write_snoop.valid.eq(rf.write_cmd.valid),
+            rvfi.rf_write_snoop.payload.reg.eq(rf.write_cmd.payload.reg),
+            rvfi.rf_write_snoop.payload.value.eq(rf.write_cmd.payload.value),
+
+            rvfi.bus_snoop.valid.eq(self.bus.cmd.valid),
+            rvfi.bus_snoop.payload.addr.eq(self.bus.cmd.payload.addr),
+            rvfi.bus_snoop.payload.data.eq(self.bus.cmd.payload.data),
+            rvfi.bus_snoop.payload.lanes.eq(self.bus.cmd.payload.lanes),
+            rvfi.bus_resp_snoop.eq(self.bus.resp),
+        ]
+        connect(m, rvfi.rvfi_out, flipped(self.rvfi))
+
+        return m
+
+class RvfiPort(Component):
+    state: In(STATE_COUNT)
+    full: In(1)
+    end_of_instruction: In(1)
+    pc: In(32)
+    pc_next: In(32)
+    insn: In(32)
+
+    rf_read_snoop: In(AlwaysReady(6))
+    rf_read_resp_snoop: In(16)
+
+    rf_write_snoop: In(AlwaysReady(RegWrite(6)))
+
+    bus_snoop: In(AlwaysReady(BusCmd(addr = 31, data = 16)))
+    bus_resp_snoop: In(16)
+
+    rvfi_out: Out(AlwaysReady(Rvfi()))
+
+    register_half_mismatch: Out(1)
+    disjoint_memory: Out(1)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        m.d.comb += [
+            self.rvfi_out.payload.ixl.eq(Ixl._32),
+            self.rvfi_out.payload.mode.eq(Mode.M),
+        ]
+
+        load_expected = Signal(2)
+        after_end = Signal()
+        rs1_addr_d = Signal(5)
+
+        m.d.sync += after_end.eq(self.end_of_instruction)
+
+        with m.If(self.end_of_instruction):
+            m.d.sync += [
+                self.rvfi_out.valid.eq(self.full),
+                self.rvfi_out.payload.order.eq(self.rvfi_out.payload.order + 1),
+                self.rvfi_out.payload.pc_wdata.eq(self.pc_next),
+
+                rs1_addr_d.eq(self.rf_read_snoop.payload[:5]),
+            ]
+        with m.Else():
+            m.d.sync += self.rvfi_out.valid.eq(0)
+
+        with m.If(after_end):
+            m.d.sync += [
+                # Clear the things that accumulate
+                self.rvfi_out.payload.halt.eq(0),
+                self.rvfi_out.payload.mem_wmask.eq(0),
+                self.rvfi_out.payload.mem_wdata.eq(0),
+                self.rvfi_out.payload.mem_rmask.eq(0),
+                self.rvfi_out.payload.mem_rdata.eq(0),
+                self.rvfi_out.payload.rd_addr.eq(0),
+                self.rvfi_out.payload.rd_wdata.eq(0),
+
+                self.register_half_mismatch.eq(0),
+                self.disjoint_memory.eq(0),
+                self.rvfi_out.payload.rs1_addr.eq(rs1_addr_d),
+            ]
+
+        with m.If(self.full):
+            with m.If(self.state[0]):
+                m.d.sync += [
+                    self.rvfi_out.payload.rs1_rdata[:16].eq(self.rf_read_resp_snoop),
+                    self.rvfi_out.payload.rs2_addr.eq(self.rf_read_snoop.payload[:5]),
+
+                    self.rvfi_out.payload.pc_rdata.eq(self.pc),
+
+                    self.rvfi_out.payload.insn.eq(self.insn),
+                ]
+
+            with m.If(self.state[1]):
+                m.d.sync += [
+                    self.rvfi_out.payload.rs2_rdata[:16].eq(self.rf_read_resp_snoop),
+                ]
+
+            with m.If(self.state[2]):
+                m.d.sync += [
+                    self.rvfi_out.payload.rs1_rdata[16:].eq(self.rf_read_resp_snoop),
+                ]
+
+            with m.If(self.state[3]):
+                m.d.sync += [
+                    self.rvfi_out.payload.rs2_rdata[16:].eq(self.rf_read_resp_snoop),
+                ]
+
+            with m.If(self.rf_write_snoop.valid):
+                with m.If(self.rf_write_snoop.payload.reg[5]):
+                    m.d.sync += [
+                        self.rvfi_out.payload.rd_wdata[16:].eq(self.rf_write_snoop.payload.value),
+                        self.rvfi_out.payload.rd_addr.eq(self.rf_write_snoop.payload.reg[:5]),
+                    ]
+                    with m.If(self.rvfi_out.payload.rd_addr != self.rf_write_snoop.payload.reg[:5]):
+                        # register half mismatch
+                        m.d.sync += [
+                            self.rvfi_out.payload.halt.eq(1),
+                            self.register_half_mismatch.eq(1),
+                        ]
+                with m.Else():
+                    m.d.sync += [
+                        self.rvfi_out.payload.rd_wdata[:16].eq(self.rf_write_snoop.payload.value),
+                        self.rvfi_out.payload.rd_addr.eq(self.rf_write_snoop.payload.reg[:5]),
+                    ]
+
+            with m.If(load_expected[1]):
+                m.d.sync += load_expected.eq(0)
+                with m.If(load_expected[0]):
+                    # high halfword
+                    m.d.sync += self.rvfi_out.payload.mem_rdata[16:].eq(
+                        self.bus_resp_snoop
+                    )
+                with m.Else():
+                    # low halfword
+                    m.d.sync += self.rvfi_out.payload.mem_rdata[:16].eq(
+                        self.bus_resp_snoop
+                    )
+
+            # Ignore bus activity in states 1/2 as RVFI doesn't consider fetch
+            # traffic.
+            with m.If(self.bus_snoop.valid & ~(self.state[1] | self.state[2])):
+                with m.If(self.rvfi_out.payload.mem_wmask.any() | self.rvfi_out.payload.mem_rmask.any()):
+                    # If we've seen a halfword access already on this instruction,
+                    # check the next one for consistency.
+                    with m.If(self.bus_snoop.payload.addr[1:] != self.rvfi_out.payload.mem_addr[2:]):
+                        # halfword accesses have not targeted the same word.
+                        m.d.sync += [
+                            self.rvfi_out.payload.halt.eq(1),
+                            self.disjoint_memory.eq(1),
+                        ]
+
+                with m.If(~self.bus_snoop.payload.addr[0]):
+                    # low halfword
+                    m.d.sync += [
+                        # Present addresses word-aligned
+                        self.rvfi_out.payload.mem_addr.eq(Cat(0, 0, self.bus_snoop.payload.addr[1:])),
+                        # Set low bits of masks.
+                        self.rvfi_out.payload.mem_wmask[:2].eq(
+                            self.rvfi_out.payload.mem_wmask[:2] | self.bus_snoop.payload.lanes),
+                        self.rvfi_out.payload.mem_rmask[:2].eq(
+                            self.rvfi_out.payload.mem_rmask[:2]
+                            | (~self.bus_snoop.payload.lanes.any()).replicate(2)
+                        ),
+                    ]
+                    with m.If(self.bus_snoop.payload.lanes[0]):
+                        m.d.sync += self.rvfi_out.payload.mem_wdata[:8].eq(
+                            self.bus_snoop.payload.data[:8]
+                        )
+                    with m.If(self.bus_snoop.payload.lanes[1]):
+                        m.d.sync += self.rvfi_out.payload.mem_wdata[8:16].eq(
+                            self.bus_snoop.payload.data[8:16]
+                        )
+                with m.Else():
+                    # high halfword
+                    m.d.sync += [
+                        # Present addresses word-aligned
+                        self.rvfi_out.payload.mem_addr.eq(Cat(0, 0, self.bus_snoop.payload.addr[1:])),
+                        # Set high bits of masks.
+                        self.rvfi_out.payload.mem_wmask[2:].eq(
+                            self.rvfi_out.payload.mem_wmask[2:] | self.bus_snoop.payload.lanes),
+                        self.rvfi_out.payload.mem_rmask[2:].eq(
+                            self.rvfi_out.payload.mem_rmask[2:]
+                            | (~self.bus_snoop.payload.lanes.any()).replicate(2)
+                        ),
+                    ]
+                    with m.If(self.bus_snoop.payload.lanes[0]):
+                        m.d.sync += self.rvfi_out.payload.mem_wdata[16:24].eq(
+                            self.bus_snoop.payload.data[:8]
+                        )
+                    with m.If(self.bus_snoop.payload.lanes[1]):
+                        m.d.sync += self.rvfi_out.payload.mem_wdata[24:].eq(
+                            self.bus_snoop.payload.data[8:]
+                        )
+                with m.If(self.bus_snoop.payload.lanes == 0):
+                    m.d.sync += [
+                        load_expected[1].eq(1),
+                        load_expected[0].eq(self.bus_snoop.payload.addr[0]),
+                    ]
 
         return m

@@ -94,6 +94,7 @@ class EWBox(Component):
     hold: Out(1)
 
     debug_pc_write: In(StreamSig(32 - 2))
+    debug_inst: Out(32)
 
     def __init__(self, *,
                  reset_vector = 0,
@@ -140,6 +141,8 @@ class EWBox(Component):
             # register, so it happens on the same cycle as the other decode
             # outputs.
             imm.inst.eq(dec.inst),
+
+            self.debug_inst.eq(dec.inst),
         ]
 
         # The Adder
