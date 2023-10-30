@@ -88,29 +88,15 @@ fn get32() -> u32 {
     word
 }
 
-#[inline(never)]
+//#[inline(never)]
 fn put32(word: u32) {
     for b in word.to_le_bytes() {
         putb(b);
     }
 }
 
-cfg_if::cfg_if! {
-    // This is gross, but, Cargo doesn't really provide a way to parameterize
-    // builds on numbers, soooooo
-    if #[cfg(feature = "uart-at-00000400")] {
-        const UARTRX: *mut i16 = 0x400 as _;
-        const UARTTX: *mut u16 = 0x402 as _;
-    } else if #[cfg(feature = "uart-at-00009000")] {
-        const UARTRX: *mut i16 = 0x09000 as _;
-        const UARTTX: *mut u16 = 0x09002 as _;
-    } else if #[cfg(feature = "uart-at-00018000")] {
-        const UARTRX: *mut i16 = 0x18000 as _;
-        const UARTTX: *mut u16 = 0x18002 as _;
-    } else {
-        compile_error!("no uart address feature defined");
-    }
-}
+const UARTRX: *mut i16 = generated::UART_ADDR as _;
+const UARTTX: *mut u16 = (generated::UART_ADDR + 2) as _;
 
 fn txbusy() -> bool {
     unsafe {
@@ -151,4 +137,8 @@ fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
     unsafe {
         panic_handler_should_be_optimized_out()
     }
+}
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/peripherals.rs"));
 }

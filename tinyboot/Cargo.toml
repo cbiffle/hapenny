@@ -21,3 +21,6 @@ name = "tinyboot"
 path = "src/main.rs"
 test = false
 bench = false
+
+[build-dependencies]
+parse_int = "0.6.0"
