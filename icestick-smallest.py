@@ -71,8 +71,8 @@ class Test(Elaboratable):
         m.d.comb += ResetSignal("sync").eq(~por_ready)
 
         if self.new_model:
-            F = 75e6 # Hz
-            pll_f, pll_q = 49, 3
+            F = 72e6 # Hz
+            pll_f, pll_q = 47, 3
         else:
             F = 66e6 # Hz
             pll_f, pll_q = 87, 4
@@ -123,8 +123,9 @@ class Test(Elaboratable):
 
         connect(m, cpu.bus, fabric.bus)
 
-        led = platform.request("led", 0)
-        m.d.comb += led.o.eq(outport.pins[0])
+        for i in range(1):
+            led = platform.request("led", i)
+            m.d.comb += led.o.eq(outport.pins[i])
 
         return m
 
