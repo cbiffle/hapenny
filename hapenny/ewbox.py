@@ -179,11 +179,10 @@ class EWBox(Component):
                      choosehalf(self.onehot_state[3], imm.s)),
                 ]),
                 # TODO: this could likely be folded into the mux above
-                4: mux(
-                    dec.is_load,
-                    hihalf(imm.i),
-                    lohalf(imm.b),
-                ),
+                4: oneof([
+                    (dec.is_load, hihalf(imm.i)),
+                    (dec.is_store, hihalf(imm.s)),
+                ], default = lohalf(imm.b)),
                 5: hihalf(imm.b),
             })),
             # Generate the final adder_rhs value by conditionally complementing
