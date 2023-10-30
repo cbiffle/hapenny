@@ -1,3 +1,5 @@
+import argparse
+
 from amaranth import *
 from amaranth.sim import Simulator, Delay, Settle
 from amaranth.back import verilog
@@ -145,8 +147,14 @@ def read_mem(addr):
 
     return bottom | (top << 16)
 
-def test_inst(name, inst, *, before = {}, after = {}, stop_at = None):
-    print(f"{name} ... ", end='')
+def test_inst(name, inst, *, before = {}, after = {}, stop_after = None):
+    if args.filter is not None:
+        if args.filter not in name:
+            return
+    if args.trace:
+        print(f"{name} ... ")
+    else:
+        print(f"{name} ... ", end='')
     yield phase.eq(TestPhase.SETUP)
     for r in range(1, 32):
         if r not in before:
@@ -179,18 +187,19 @@ def test_inst(name, inst, *, before = {}, after = {}, stop_at = None):
 
     yield phase.eq(TestPhase.RUN)
     cycle_count = 0
-    if stop_at is not None:
+    if stop_after is not None:
+        yield from resume()
         while True:
-            cycle_count += yield from single_step()
+            cycle_count += 1
             pc = yield from read_pc()
-            if pc == stop_at:
+            if pc == stop_after:
+                yield from halt()
                 break
+            yield
     else:
         for i in range(instruction_count):
             cycle_count += yield from single_step()
     yield
-
-    print(f"({cycle_count} cyc) ", end='')
 
     yield phase.eq(TestPhase.CHECK)
     try:
@@ -234,8 +243,15 @@ def test_inst(name, inst, *, before = {}, after = {}, stop_at = None):
     except Exception as e:
         raise Exception(f"test case {name} failed due to above exception") from e
 
-    print("PASS")
+    print(f"({cycle_count} cyc) PASS")
 
+parser = argparse.ArgumentParser(
+    prog = "sim-boxcpu",
+    description = "Test bench for 16-bit model",
+)
+parser.add_argument('-f', '--filter', help = 'Filter string for instruction tests', required = False)
+parser.add_argument('-t', '--trace', help = 'Print instruction trace', required = False, action = 'store_true')
+args = parser.parse_args()
 
 if __name__ == "__main__":
     m = Module()
@@ -279,11 +295,17 @@ if __name__ == "__main__":
     with open("sim-cpu.v", "w") as v:
         v.write(verilog_src)
 
+    started = False
+    stopping = False
+
     sim = Simulator(m)
     sim.add_clock(1e-6)
 
     def process():
+        global stopping
+        global started
         yield from halt()
+        started = True
         yield from test_inst(
             "LUI x1, 0xAAAAA000",
             0b10101010101010101010_00001_0110111,
@@ -752,18 +774,18 @@ if __name__ == "__main__":
     # 89ac/44     00008067                ret
                 0x00008067,
             ],
-            stop_at = 0x44,
+            stop_after = 0x44,
             before={
-                1: 0,
+                1: 0x1230,
                 10: 100_000,
                 11: 10,
             },
             after={
                 10: 10_000,
                 11: 0,
-                12: None,
-                13: None,
-                'PC': 0x44,
+                12: 5, # empirically
+                13: 0, # empirically
+                'PC': 0x1230,
             },
         )
         #yield from test_inst(
@@ -791,10 +813,68 @@ if __name__ == "__main__":
         yield
         yield
         yield
-
-
+        stopping = True
 
     sim.add_sync_process(process)
 
+    def rvfi_tracer():
+        while not started:
+            yield
+        while not stopping:
+            yield
+            if (yield uut.rvfi.valid):
+                order = yield uut.rvfi.payload.order
+                insn = yield uut.rvfi.payload.insn
+                trap = yield uut.rvfi.payload.trap
+                halt = yield uut.rvfi.payload.halt
+
+                rs1_addr = yield uut.rvfi.payload.rs1_addr
+                rs2_addr = yield uut.rvfi.payload.rs2_addr
+                rs1_data = yield uut.rvfi.payload.rs1_rdata
+                rs2_data = yield uut.rvfi.payload.rs2_rdata
+
+                rd_addr = yield uut.rvfi.payload.rd_addr
+                rd_data = yield uut.rvfi.payload.rd_wdata
+
+                pc_rdata = yield uut.rvfi.payload.pc_rdata
+                pc_wdata = yield uut.rvfi.payload.pc_wdata
+
+                mem_addr = yield uut.rvfi.payload.mem_addr
+                mem_rmask = yield uut.rvfi.payload.mem_rmask
+                mem_wmask = yield uut.rvfi.payload.mem_wmask
+                mem_rdata = yield uut.rvfi.payload.mem_rdata
+                mem_wdata = yield uut.rvfi.payload.mem_wdata
+
+                if halt or trap:
+                    msg = "!"
+                else:
+                    msg = "-"
+
+                msg += f" {pc_rdata:08x}"
+
+                msg += f" R[{rs1_addr:02x}]:{rs1_data:08x}"
+                msg += f" R[{rs2_addr:02x}]:{rs2_data:08x}"
+                if rd_addr != 0:
+                    msg += f" R[{rd_addr:02x}]<={rd_data:08x}"
+                else:
+                    msg += " " * 16
+
+                if pc_wdata != pc_rdata + 4:
+                    msg += f" ->{pc_wdata:08x}"
+                else:
+                    msg += " " * 11
+
+                if mem_rmask != 0:
+                    msg += f"M[{mem_addr:08x}]=>{mem_rdata:08x}/{mem_rmask:04b}"
+                elif mem_wmask != 0:
+                    msg += f"M[{mem_addr:08x}]<={mem_wdata:08x}/{mem_wmask:04b}"
+                else:
+                    msg += " " * 26
+
+                print(msg)
+
+        
+    if args.trace:
+        sim.add_sync_process(rvfi_tracer)
     with sim.write_vcd(vcd_file="test.vcd", gtkw_file="test.gtkw", traces=ports):
         sim.run()
