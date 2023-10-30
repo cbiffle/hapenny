@@ -10,10 +10,10 @@ content_hash = "sha256:c808503d28ae1ab835da266fef5614fd675cbe6ac11734c7f8a1fa285
 
 [[package]]
 name = "amaranth"
-version = "0.4.dev205+gfcafad1"
+version = "0.4.dev205+gc1c3227"
 requires_python = "~=3.8"
 git = "https://github.com/amaranth-lang/amaranth"
-revision = "fcafad1f70fb6cd949902d1956cc42547ebb59ee"
+revision = "1c3227d95626f9c7bd11c82da9d2f760113a4589"
 summary = "Amaranth hardware definition language"
 dependencies = [
     "Jinja2~=3.0",
