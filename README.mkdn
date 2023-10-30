@@ -45,8 +45,8 @@ but takes 32-64 cycles per instruction.
 | Datapath width (bits) | 32 | **16** | **16** | 1 |
 | External data bus width | 32 | **16** | **16** | 32 |
 | Average cycles per instruction | 5-ish | **5.525** | **8.033** | 40-ish |
-| Minimal size on iCE40 (LCs) | 1500-ish | **811** | **760** | 200-ish |
-| Typical MHz on iCE40 | 40s? | **72** | **66** | 40s? |
+| Minimal size on iCE40 (LCs) | 1500-ish | **828** | **760** | 200-ish |
+| Typical MHz on iCE40 | 40s? | **75** | **66** | 40s? |
 
 (Cycles/instruction is measured on Dhrystone. Minimal size is the output
 produced by the `icestick-smallest.py` script. I would appreciate help getting
