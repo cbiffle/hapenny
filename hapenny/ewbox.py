@@ -176,12 +176,18 @@ class EWBox(Component):
                     (dec.is_store,
                      choosehalf(self.onehot_state[3], imm.s)),
                 ]),
-                # In states 4/5 we only use the adder to branch.
-                4: lohalf(imm.b),
+                # TODO: this could likely be folded into the mux above
+                4: mux(
+                    dec.is_load,
+                    hihalf(imm.i),
+                    lohalf(imm.b),
+                ),
                 5: hihalf(imm.b),
             })),
             # Generate the final adder_rhs value by conditionally complementing
-            # in operate states.
+            # in operate states. (We limit this to operate states to avoid
+            # complementing the branch displacement used to compute
+            # destinations in states 4/5.
             adder_rhs.eq(mux(
                 dec.is_adder_rhs_complemented & (self.onehot_state[1] | self.onehot_state[3]),
                 ~adder_rhs_pos,
@@ -408,9 +414,11 @@ class EWBox(Component):
             # Dedicated program counter incrementer.
             pc_inc.eq(self.pc + 1),
             # Address we send to FD / load into PC
+            # TODO: this is used for both the PC update rule and the address
+            # presented to fetch, but the first bits are irrelevant for fetch
+            # -- could this be simplified?
             self.pc_next.eq(mux(
                 self.full,
-                # When full, the PC we send is either...
                 mux(
                     # ... when taking a branch,
                     dec.is_jal_or_jalr
