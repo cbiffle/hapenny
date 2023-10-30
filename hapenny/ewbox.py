@@ -102,6 +102,8 @@ class EWBox(Component):
                  counters = False,
                  ):
         super().__init__()
+        assert reset_vector.bit_length() <= prog_addr_width, \
+                f"reset vector 0x{reset_vector:x} won't fit in PC"
 
         # Create a bus port of sufficient width to address anything on the bus.
         # (Width is -1 because we're addressing halfwords.)
