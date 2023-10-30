@@ -28,7 +28,10 @@ pub extern "C" fn main() -> ! {
                 ack();
                 core::arch::asm!(
                     "
-                    la ra, __start      # restart monitor if it returns
+                    # restart monitor if program returns.
+                 1: auipc ra, %pcrel_hi(__start)
+                    addi ra, ra, %pcrel_lo(1b)
+
                     jr a0               # activate routine
                     ",
                     in("a0") a,
