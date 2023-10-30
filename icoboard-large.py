@@ -74,13 +74,9 @@ class Test(Elaboratable):
         m.submodules.pll = Instance(
             "SB_PLL40_2F_CORE",
             p_FEEDBACK_PATH = "PHASE_AND_DELAY",
-            #p_DELAY_ADJUSTMENT_MODE_FEEDBACK = "FIXED",
-            #p_DELAY_ADJUSTMENT_MODE_RELATIVE = "FIXED",
             p_PLLOUT_SELECT_PORTA = "SHIFTREG_0deg",
             p_PLLOUT_SELECT_PORTB = "SHIFTREG_90deg",
             p_SHIFTREG_DIV_MODE = 0,
-            #p_FDA_FEEDBACK = 0b1111,
-            #p_FDA_RELATIVE = 0b1111,
             p_DIVR = pll_r,
             p_DIVF = pll_f,
             p_DIVQ = pll_q,
@@ -89,7 +85,7 @@ class Test(Elaboratable):
             i_REFERENCECLK = clk100.io,
             i_RESETB = 1,
             o_PLLOUTGLOBALA = cd_sync.clk,
-            o_PLLOUTGLOBALB = clk_90,
+            o_PLLOUTCOREB = clk_90,
         )
 
         # Memory map should be:
@@ -142,7 +138,6 @@ class Test(Elaboratable):
             Resource("tx", 0, Pins("2", dir="o", conn=("pmod", 1))),
             Resource("rx", 0, Pins("3", dir="i", conn=("pmod", 1))),
         ])
-
 
         # UART wiring
         tx = platform.request("tx", 0)
