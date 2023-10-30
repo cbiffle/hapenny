@@ -10,7 +10,7 @@ from hapenny.bus import BusPort
 # Note: the binary representation of these variants is chosen to match the
 # bottom two bits of funct3 of the CSR instructions, except for NONE which uses
 # a spare encoding.
-class WriteMode(Enum):
+class WriteMode(Enum, shape = unsigned(2)):
     NONE = 0b00
     REPL = 0b01
     OR = 0b10
