@@ -486,6 +486,20 @@ if __name__ == "__main__":
             )
 
         yield from test_inst(
+            "SW x15, -168(x26)",
+            0xf4fd2c23, # from a failing program
+            before={
+                15: 0x12345678,
+                26: 0x4000,
+                '@3f58': 0xDEADBEEF,
+            },
+            after={
+                '@3f58': 0x12345678,
+                'PC': 4,
+            },
+        )
+
+        yield from test_inst(
             "ADD x1, x2, x3",
             0b0000000_00011_00010_000_00001_0110011,
             before={

@@ -216,11 +216,15 @@ class EWBox(Component):
                     | (dec.is_alu_rr & dec.inst[30]),
                 # Capture adder carry in state 1 and 4.
                 (1, 4): adder_carry_out,
-                # We need to clear saved carry for the branch target computation
-                # on a taken branch -- clearing it unconditionally doesn't hurt
-                # and saves some logic.
-                3: 0,
-            }, default = saved_carry)),
+                # Preserve carry between operate states.
+                2: saved_carry,
+                # We need to clear saved carry for the branch target
+                # computation on a taken branch. For stores, we want to capture
+                # the adder output. None of the other instructions care about
+                # the carry at the end of step 3, so we can just switch off the
+                # branch signal:
+                3: mux(dec.is_b, 0, saved_carry),
+            })),
 
             saved_zero.eq(oneof([
                 # Initially, set saved zero unconditionally, so that chaining
