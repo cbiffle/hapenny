@@ -3,12 +3,6 @@ name = "hapenny-tinyboot"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = ["uart-at-00018000"] # mostly for rust-analyzer to work
-uart-at-00000400 = []
-uart-at-00009000 = []
-uart-at-00018000 = []
-
 [dependencies]
 cfg-if = "1.0.0"
 
