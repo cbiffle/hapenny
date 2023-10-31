@@ -128,7 +128,7 @@ class Test(Elaboratable):
         m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
                                              contents = boot_image)
         # Make the simplest output port possible.
-        m.submodules.outport = outport = OutputPort(1)
+        m.submodules.outport = outport = OutputPort(1, read_back = False)
         m.submodules.fabric = fabric = SimpleFabric([
             mem.bus,
             partial_decode(m, outport.bus, RAM_ADDR_BITS),
