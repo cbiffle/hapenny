@@ -802,13 +802,20 @@ if __name__ == "__main__":
                 'PC': 0x1230,
             },
         )
-        #yield from test_inst(
-        #    f"CSRRWI x1, mscratch, 17",
-        #    0b0011_0100_0000_10001_101_00001_1110011,
-        #    after={
-        #        1: 0,
-        #    },
-        #)
+        yield from test_inst(
+            f"rdcycle x1",
+            0b1100_0000_0000_00000_011_00001_1110011,
+            after={
+                1: None,
+            },
+        )
+        yield from test_inst(
+            f"rdinstret x1",
+            0b1100_0000_0010_00000_011_00001_1110011,
+            after={
+                1: None,
+            },
+        )
         #yield from test_inst(
         #    f"CSRRS x1, mstatus, x3(=0xFF) / read back",
         #    [
