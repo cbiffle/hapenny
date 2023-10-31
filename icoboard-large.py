@@ -13,7 +13,7 @@ from boards.icoboard import IcoboardPlatform
 from hapenny import StreamSig
 from hapenny.boxcpu import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
-from hapenny.gpio import OutputPort
+from hapenny.gpio import OutputPort, InputPort
 from hapenny.serial import BidiUart
 from hapenny.mem import BasicMemory, SpramMemory
 from hapenny.extsram import ExternalSRAM
@@ -22,7 +22,7 @@ BOOT_ROM_WORDS = 256
 BOOT_ROM_ADDR_BITS = (BOOT_ROM_WORDS - 1).bit_length()
 
 bootloader = Path("icolarge-bootloader.bin").read_bytes()
-boot_image = struct.unpack("<" + "h" * (len(bootloader) // 2), bootloader)
+boot_image = struct.unpack("<" + "H" * (len(bootloader) // 2), bootloader)
 
 assert len(boot_image) <= BOOT_ROM_WORDS, \
         f"bootloader is {len(boot(image))} words long, too big for boot ROM"
@@ -93,6 +93,7 @@ class Test(Elaboratable):
         # 0010_0000     boot ROM
         # 0010_1000     UART
         # 0010_2000     output port
+        # 0010_3000     input port
 
         m.submodules.cpu = cpu = Cpu(
             reset_vector = 0x10_0000,  # boot ROM
@@ -115,13 +116,15 @@ class Test(Elaboratable):
         # Create a subfabric for the top mebibyte of the addressible space. This
         # will include both our I/O devices and our boot ROM. We'll give each
         # thing a 4096 byte (2048-halfword) region.
-        m.submodules.port = port = OutputPort(3)
+        m.submodules.outport = outport = OutputPort(3)
+        m.submodules.inport = inport = InputPort(2)
         m.submodules.uart = uart = BidiUart(baud_rate = 115200,
                                             clock_freq = F)
         m.submodules.iofabric = iofabric = SimpleFabric([
             partial_decode(m, bootmem.bus, 11),     # 0x____0000
             partial_decode(m, uart.bus, 11),        # 0x____1000
-            partial_decode(m, port.bus, 11),        # 0x____2000
+            partial_decode(m, outport.bus, 11),     # 0x____2000
+            partial_decode(m, inport.bus, 11) ,     # 0x____3000
         ])
 
         # Create the top-level fabric to unite memory and I/O.
@@ -150,7 +153,12 @@ class Test(Elaboratable):
         # LED wiring
         for i in range(3):
             led = platform.request("led", i)
-            m.d.comb += led.o.eq(port.pins[i])
+            m.d.comb += led.o.eq(outport.pins[i])
+
+        # Input port wiring
+        for i in range(2):
+            button = platform.request("button", i)
+            m.d.comb += inport.pins[i].eq(button.i)
 
         # SRAM wiring. NOTE: Amaranth models all the SRAM control signals as
         # active-high and inverts at the pin. This means all of our signals

@@ -112,3 +112,42 @@ class OutputPort(Component):
             m.d.comb += self.bus.resp.eq(self.pins)
 
         return m
+
+class InputPort(Component):
+    """A simple input port peripheral. Can read the state of pins.
+
+    Memory Map
+    ----------
+    +00: pins (read only, writes ignored)
+
+    Parameters
+    ----------
+    pins (integer): number of pins to implement, 0-16.
+
+    Attributes
+    ----------
+    bus (port): connection to the fabric.
+    pins (signal array): input from pins.
+    """
+    bus: In(BusPort(addr = 0, data = 16))
+
+    def __init__(self, pins):
+        super().__init__()
+        self.pins = Signal(pins)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        # Am I the simplest peripheral? I think so!
+
+        # Register inputs to cut the path from pins, and also to avoid leaking
+        # metastability.
+        pins_r = Signal(self.pins.shape().width)
+        m.d.sync += pins_r.eq(self.pins)
+
+        # Always output the state from the last cycle onto the bus. This has the
+        # nice side effect of returning the state of the pins when the read was
+        # _issued_ rather than when it completed.
+        m.d.comb += self.bus.resp.eq(pins_r)
+
+        return m
