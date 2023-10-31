@@ -27,6 +27,8 @@ class BusPort(Signature):
         })
 
 def partial_decode(m, bus, width):
+    assert width >= bus.cmd.payload.addr.shape().width, \
+            "can't use partial_decode to make a bus narrower"
     port = BusPort(addr = width, data = bus.cmd.payload.data.shape()).flip().create()
     m.d.comb += [
         bus.cmd.payload.addr.eq(port.cmd.payload.addr),
