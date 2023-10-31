@@ -13,11 +13,13 @@ Dhrystone (you need at least 18 kiB).
 
 ## Current results
 
-For the `upduino-large` SoC example using the newer (`box`) CPU revision:
+For the `upduino-large` SoC example using the newer (`box`) CPU revision, with
+the integer overflows fixed in the C code for printing cycle counts (boo C!), we
+get:
 
 ```
-Number_Of_Runs: 100
-User_Time: 214511 cycles, 38823 insn
+Number_Of_Runs: 10000
+User_Time: 21440119 cycles, 3880025 insn
 Cycles_Per_Instruction: 5.525
 Dhrystones_Per_Second_Per_MHz: 466
 DMIPS_Per_MHz: 0.265

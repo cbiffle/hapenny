@@ -132,7 +132,7 @@ main ()
   {
     // int n;
     // scanf ("%d", &n);
-    Number_Of_Runs = 1000;
+    Number_Of_Runs = RUNS;
   }
   printf ("\n");
 
@@ -275,20 +275,20 @@ main ()
   printf("Number_Of_Runs: %d\n", Number_Of_Runs);
   printf("User_Time: %d cycles, %d insn\n", User_Time, User_Insn);
 
-  int Cycles_Per_Instruction_x1000 = (1000 * User_Time) / User_Insn;
-  printf("Cycles_Per_Instruction: %d.%d%d%d\n", Cycles_Per_Instruction_x1000 / 1000,
-		(Cycles_Per_Instruction_x1000 / 100) % 10,
-		(Cycles_Per_Instruction_x1000 / 10) % 10,
-		(Cycles_Per_Instruction_x1000 / 1) % 10);
+  long long Cycles_Per_Instruction_x1000 = (1000 * (long long)User_Time) / User_Insn;
+  printf("Cycles_Per_Instruction: %d.%d%d%d\n", (int) (Cycles_Per_Instruction_x1000 / 1000),
+		(int) (Cycles_Per_Instruction_x1000 / 100) % 10,
+		(int) (Cycles_Per_Instruction_x1000 / 10) % 10,
+		(int) (Cycles_Per_Instruction_x1000 / 1) % 10);
 
-  int Dhrystones_Per_Second_Per_MHz = (Number_Of_Runs * 1000000) / User_Time;
-  printf("Dhrystones_Per_Second_Per_MHz: %d\n", Dhrystones_Per_Second_Per_MHz);
+  int Dhrystones_Per_Second_Per_MHz = ((long long) Number_Of_Runs * 1000000) / User_Time;
+  printf("Dhrystones_Per_Second_Per_MHz: %d\n", (int) Dhrystones_Per_Second_Per_MHz);
 
-  int DMIPS_Per_MHz_x1000 = (1000 * Dhrystones_Per_Second_Per_MHz) / 1757;
-  printf("DMIPS_Per_MHz: %d.%d%d%d\n", DMIPS_Per_MHz_x1000 / 1000,
-		(DMIPS_Per_MHz_x1000 / 100) % 10,
-		(DMIPS_Per_MHz_x1000 / 10) % 10,
-		(DMIPS_Per_MHz_x1000 / 1) % 10);
+  int DMIPS_Per_MHz_x1000 = (1000 * (long long) Dhrystones_Per_Second_Per_MHz) / 1757;
+  printf("DMIPS_Per_MHz: %d.%d%d%d\n", (int) (DMIPS_Per_MHz_x1000 / 1000),
+		(int) (DMIPS_Per_MHz_x1000 / 100) % 10,
+		(int) (DMIPS_Per_MHz_x1000 / 10) % 10,
+		(int) (DMIPS_Per_MHz_x1000 / 1) % 10);
 #else
   if (User_Time < Too_Small_Time)
   {
