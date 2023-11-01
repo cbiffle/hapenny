@@ -11,7 +11,7 @@ from hapenny.bus import BusPort
 # Maximum number of (unique) states needed by any instruction, plus one
 # additional for halt. (Note that repeated states when e.g. shifting do not
 # count as unique states.)
-STATE_COUNT = 6 + 1
+STATE_COUNT = 3 + 1
 
 class SBox(Component):
     """The S-Box sequences the other components.

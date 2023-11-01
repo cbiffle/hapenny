@@ -1,0 +1,117 @@
+# Cost-Benefit of Half-Width Datapath
+
+Part of my goal with `hapenny` was to try and determine how the speed and size
+of an RV32 CPU changes when it uses a half-width datapath. Comparisons against
+other RV32 CPUs are a good start, but it's hard to do apples-to-apples
+comparisons, because the different CPUs have different goals, different
+microarchitectures, and different bus interfaces.
+
+To more accurately compare the datapath widths, I've modified the `hapenny` v2
+microarchitecture to produce a similarly-designed CPU with a 32-bit datapath,
+and I've given it the obvious name.
+
+## `chonk`: Oh Lawd, He Comin'
+
+`chonk` is a copy-paste-edit of the `hapenny` v2 core. The diffs between the
+cores are fairly compact, and much logic is shared:
+
+- The main datapath, including the adder, is now 32 bits wide.
+- The register file can still only read one instruction per cycle, though the
+  reads and writes are now 32 bits wide as well.
+- The data bus is now 32 bits wide.
+- Most decoding logic is shared and the state machine is similar, but with fewer
+  states.
+
+You can load `chonk` onto an Icestick eval board using the `icestick-chonk.py`
+script.
+
+## Ways this comparison isn't great
+
+`chonk` uses a 32-bit data bus, which means 32-bit-wide RAM and peripherals.
+This makes peripherals slightly more expensive, and doubles the resource usage
+of the smallest possible RAM. While `hapenny` can happily run at full speed out
+of a single 16-bit block RAM, `chonk` needs at least two.
+
+Of course, on FPGAs with wider 32-36 bit block RAMs, this is fine.
+
+`chonk` uses a register file with doubled bandwidth: still only one read port,
+but only one read is required to get the full contents of any 32-bit register.
+This is largely responsible for its lower clocks-per-instruction.
+
+## Effects of widening the datapath
+
+| Parameter              | `hapenny` 2 | `chonk` | Change |
+| ---------------------- | ----------- | ------- | ------ |
+| LCs on iCE40           | 813         | 972     | +20%   |
+| Fmax (MHz)             | 66          | 62      | -6%    |
+| Cycles/instruction     | 5.525       | 2.925   | -47%   |
+| Instructions/second    | 11.946      | 21.197  | +77%   |
+
+Observations:
+
+- `chonk` tends to have a lower Fmax than `hapenny` because of longer carry
+  chains in additions and comparisons.
+
+- `chonk` is only about 21% larger, because much of the control logic is
+  unchanged, and a lot of datapath control logic removed compared to the 16-bit
+  version.
+
+- Even with the lower Fmax, `chonk` gets significantly higher performance in
+  terms of RV32 instructions executed per second.
+
+Instruction timing:
+
+| Instruction   | `hapenny` 2 | `chonk` | Change  |
+| ------------- | ----------- | ------- | ------- |
+| AUIPC         | 4           | 2       | -50%    |
+| LUI           | 4           | 2       | -50%    |
+| JAL           | 8           | 4       | -50%    |
+| JALR          | 8           | 4       | -50%    |
+| Branch        | 5/10        | 3/5     | -40/50% |
+| Load          | 6           | 3       | -50%    |
+| SW            | 5           | 2       | -60%    |
+| SB/SH         | 4           | 2       | -50%    |
+| SLT(I)(U)     | 6           | 3       | -50%    |
+| Shift         | 6 + N       | 3 + N   | -8-50%  |
+| Other ALU op  | 4           | 2       | -50%    |
+| division test | 956         | 519     | -46%    |
+
+As you can see from this table, most instructions on `chonk` take half the
+cycles as `hapenny`, because both cores are fundamentally restricted by register
+file bandwidth. There are some instructions that don't show that degree of
+improvement, which is why the average instructions per clock on Dhrystone isn't
+exactly 2x:
+
+- Not-taken branches are only 40% faster.
+- Shifts still take one cycle per bit moved, on either core, so the 50%
+  advantage when shifting by zero bits drops to an 8% advantage at 31.
+
+On both Dhrystone and the division test case from the testbenches (which is an
+extract of libgcc and a hot path in Dhrystone), we see about a 46% reduction in
+cycles required to execute a given workload.
+
+
+## Conclusions
+
+In FPGAs, where adders are relatively inexpensive and flops plentiful, cutting
+the datapath of an RV32 implementation in half doesn't save quite as much area
+as you might expect -- about 17% (972 LCs down to 813). It causes RV32
+instructions to execute at roughly half the speed, since two steps are required
+for any 32-bit operation. (Excluding shifts -- these cores implement shifts
+naively.)
+
+This leaves us with three main benefits to the approach:
+
+1. A fully-realized SoC built out of 16-bit memories and peripherals will tend
+   to use less of an FPGA -- in other words, the area advantage grows with
+   system complexity.
+
+2. The 16-bit version can often close timing at higher frequencies, due in large
+   part to the shorter carry chains. (The 16-bit design is basically equivalent
+   to a 32-bit design with a register in the middle of the adder -- only smaller
+   and more complex.)
+
+3. The ability to use 16-bit memory without further performance penalty has its
+   own advantages, such as the ability to run out of 16-bit external SRAM. On
+   FPGAs with 16-bit (or 18-bit) block RAMs, a 16-bit implementation can use
+   fewer of them, leaving others available for other things.

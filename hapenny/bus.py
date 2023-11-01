@@ -40,6 +40,20 @@ def partial_decode(m, bus, width):
     ]
     return port
 
+def narrow_addr(m, bus, width):
+    assert width <= bus.cmd.payload.addr.shape().width, \
+            "can't use narrow_addr to make a bus wider"
+    port = BusPort(addr = width, data = bus.cmd.payload.data.shape()).flip().create()
+    m.d.comb += [
+        bus.cmd.payload.addr.eq(port.cmd.payload.addr),
+        bus.cmd.payload.data.eq(port.cmd.payload.data),
+        bus.cmd.payload.lanes.eq(port.cmd.payload.lanes),
+        bus.cmd.valid.eq(port.cmd.valid),
+
+        port.resp.eq(bus.resp),
+    ]
+    return port
+
 class SimpleFabric(Elaboratable):
     def __init__(self, devices):
         assert len(devices) > 0
