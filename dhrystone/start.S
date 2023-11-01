@@ -11,31 +11,31 @@ start:
 	li a4, 'R'
 	li a5, '\r'
 	li a6, '\n'
-	sh a1, 2(a0)
-1:      lh t0, 2(a0)
+	sh a1, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a2, 2(a0)
-1:      lh t0, 2(a0)
+	sh a2, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a3, 2(a0)
-1:      lh t0, 2(a0)
+	sh a3, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a4, 2(a0)
-1:      lh t0, 2(a0)
+	sh a4, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a2, 2(a0)
-1:      lh t0, 2(a0)
+	sh a2, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a5, 2(a0)
-1:      lh t0, 2(a0)
+	sh a5, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a6, 2(a0)
+	sh a6, 4(a0)
 
 	/* set stack pointer */
 	li sp, STACK
@@ -56,30 +56,30 @@ start:
 	addi a5,zero,'\r'
 	addi a6,zero,'\n'
 
-1:      lh t0, 2(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a1, 2(a0)
-1:      lh t0, 2(a0)
+	sh a1, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a2, 2(a0)
-1:      lh t0, 2(a0)
+	sh a2, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a3, 2(a0)
-1:      lh t0, 2(a0)
+	sh a3, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a4, 2(a0)
-1:      lh t0, 2(a0)
+	sh a4, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a5, 2(a0)
-1:      lh t0, 2(a0)
+	sh a5, 4(a0)
+1:      lh t0, 4(a0)
         bnez t0, 1b
 
-	sh a6, 2(a0)
+	sh a6, 4(a0)
 
         # return to monitor
         lw ra, (sp)

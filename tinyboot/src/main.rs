@@ -98,8 +98,8 @@ fn put32(word: u32) {
     }
 }
 
-const UARTRX: *mut i16 = generated::UART_ADDR as _;
-const UARTTX: *mut u16 = (generated::UART_ADDR + 2) as _;
+const UARTRX: *mut i32 = generated::UART_ADDR as _;
+const UARTTX: *mut u32 = (generated::UART_ADDR + 4) as _;
 
 fn txbusy() -> bool {
     unsafe {
@@ -116,7 +116,7 @@ fn flush() {
 fn putb(b: u8) {
     flush();
     unsafe {
-        UARTTX.write_volatile(u16::from(b));
+        UARTTX.write_volatile(u32::from(b));
     }
 }
 

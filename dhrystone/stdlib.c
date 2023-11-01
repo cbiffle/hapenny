@@ -52,15 +52,15 @@ char *malloc(int size)
 
 static void printf_c(int c)
 {
-    while (*((short volatile *)(UARTADDR + 2)) != 0) {}
+    while (*((int volatile *)(UARTADDR + 4)) != 0) {}
 
     if (c == '\n') {
         // Add carriage returns for serial terminal compatibility.
-	*((volatile short*)(UARTADDR + 2)) = '\r';
-        while (*((short volatile *)(UARTADDR + 2)) != 0) {}
+	*((volatile int*)(UARTADDR + 4)) = '\r';
+        while (*((int volatile *)(UARTADDR + 4)) != 0) {}
     }
 
-    *((volatile short*)(UARTADDR + 2)) = c;
+    *((volatile int*)(UARTADDR + 4)) = c;
 }
 
 static void printf_s(char *p)
