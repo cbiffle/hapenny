@@ -9,8 +9,7 @@ from amaranth.build import ResourceError, Resource, Pins, Attrs
 from amaranth_boards.upduino_v3 import UpduinoV3Platform
 
 from hapenny import StreamSig
-import hapenny.boxcpu
-import hapenny.cpu16
+import hapenny.cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.gpio import OutputPort
 from hapenny.serial import BidiUart
@@ -25,33 +24,21 @@ bootloader = Path("upduino-bootloader.bin").read_bytes()
 boot_image = struct.unpack("<" + "h" * (len(bootloader) // 2), bootloader)
 
 class Test(Elaboratable):
-    def __init__(self, *, old_version):
-        super().__init__()
-        self.old_version = old_version
-
     def elaborate(self, platform):
         m = Module()
 
-        if self.old_version:
-            m.submodules.cpu = cpu = hapenny.cpu16.Cpu(
-                reset_vector = 0x0_8000,
-                # +1 to adjust from bus halfword addressing to CPU byte
-                # addressing.
-                addr_width = 2 + 14 + 1,
-            )
-        else:
-            m.submodules.cpu = cpu = hapenny.boxcpu.Cpu(
-                reset_vector = 0x0_8000,
-                # +1 to adjust from bus halfword addressing to CPU byte
-                # addressing.
-                addr_width = 2 + 14 + 1,
-                # Program addresses only need to be able to address RAM, not
-                # I/O, so configure the PC and fetch port to be narrower. (+1
-                # because, again, our RAM is halfword addressed but this
-                # parameter is in bytes.)
-                prog_addr_width = 1 + 14 + 1,
-                counters = True,
-            )
+        m.submodules.cpu = cpu = hapenny.cpu.Cpu(
+            reset_vector = 0x0_8000,
+            # +1 to adjust from bus halfword addressing to CPU byte
+            # addressing.
+            addr_width = 2 + 14 + 1,
+            # Program addresses only need to be able to address RAM, not
+            # I/O, so configure the PC and fetch port to be narrower. (+1
+            # because, again, our RAM is halfword addressed but this
+            # parameter is in bytes.)
+            prog_addr_width = 1 + 14 + 1,
+            counters = True,
+        )
         m.submodules.bootmem = bootmem = BasicMemory(depth = RAM_WORDS,
                                                      contents = boot_image)
         m.submodules.bulkmem0 = bulkmem0 = SpramMemory()
@@ -98,10 +85,9 @@ parser = argparse.ArgumentParser(
     prog = "upduino-large",
     description = "Script for synthesizing a larger UPduino SoC",
 )
-parser.add_argument('--old', help = 'use old CPU revision', required = False, action = 'store_true')
 args = parser.parse_args()
 
 
 p = UpduinoV3Platform()
 p.hfosc_div = 1 # divide 48MHz by 2**1 = 24 MHz
-p.build(Test(old_version = args.old), do_program = True)
+p.build(Test(), do_program = True)

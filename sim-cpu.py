@@ -6,7 +6,7 @@ from amaranth.back import verilog
 from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 
-from hapenny.boxcpu import Cpu
+from hapenny.cpu import Cpu
 from hapenny.bus import BusPort, partial_decode, SimpleFabric
 from hapenny import *
 from hapenny.mem import BasicMemory
@@ -246,7 +246,7 @@ def test_inst(name, inst, *, before = {}, after = {}, stop_after = None):
     print(f"({cycle_count} cyc) PASS")
 
 parser = argparse.ArgumentParser(
-    prog = "sim-boxcpu",
+    prog = "sim-cpu",
     description = "Test bench for 16-bit model",
 )
 parser.add_argument('-f', '--filter', help = 'Filter string for instruction tests', required = False)
