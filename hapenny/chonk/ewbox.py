@@ -140,6 +140,7 @@ class EWBox(Component):
         # also to perform comparisons.
         adder_carry_in = Signal(1)
 
+        adder_immediate = Signal(32)
         adder_rhs_pos = Signal(32)
         adder_rhs = Signal(32)
 
@@ -148,15 +149,12 @@ class EWBox(Component):
         zero_out = Signal(1)
 
         m.d.comb += [
-            # Adder RHS operand selection. We choose the "positive" version of
-            # the operand here and potentially complement it below.
-            adder_rhs_pos.eq(onehot_choice(self.onehot_state, {
-                # Operate state:
+            # The immediate selection for the adder has never come up on the
+            # critical path, so it pays to put more levels of logic _here_ and
+            # then have as thin of a mux as possible to choose between this or
+            # the register file at the very end.
+            adder_immediate.eq(onehot_choice(self.onehot_state, {
                 1: oneof([
-                    # Register for things like ALU reg-reg instructions, but
-                    # also for branches to perform the compare:
-                    (dec.is_any_reg_to_adder, self.rf_resp),
-                    # The various immediates:
                     (dec.is_auipc_or_lui, imm.u),
                     (dec.is_jal, imm.j),
                     (dec.is_any_imm_i, imm.i),
@@ -165,15 +163,28 @@ class EWBox(Component):
                 # In state 2 we only use the adder to branch.
                 2: imm.b,
             })),
+
+            # Adder RHS operand selection. We choose the "positive" version of
+            # the operand here and potentially complement it below.
+            #
+            # This mux is complicated because of branches. Branches are the
+            # only operation that perform two independent additions: first a
+            # comparison, then a branch target calculation. So, we have to be
+            # careful to only select the register in state 1.
+            adder_rhs_pos.eq(mux(
+                dec.is_any_reg_to_adder & self.onehot_state[1],
+                self.rf_resp,
+                adder_immediate,
+            )),
             # Generate the final adder_rhs value by conditionally complementing
             # in operate state. (We limit this to operate state to avoid
             # complementing the branch displacement used to compute
             # destinations in state 2.
-            adder_rhs.eq(mux(
-                dec.is_adder_rhs_complemented & self.onehot_state[1],
-                ~adder_rhs_pos,
-                adder_rhs_pos,
-            )),
+            adder_rhs.eq(
+                adder_rhs_pos ^
+                (dec.is_adder_rhs_complemented &
+                     self.onehot_state[1]).replicate(32)
+            ),
             # Adder implementation:
             Cat(adder_result, adder_carry_out).eq(
                 self.accum + adder_rhs + adder_carry_in,

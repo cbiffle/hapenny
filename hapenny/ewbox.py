@@ -155,6 +155,7 @@ class EWBox(Component):
         saved_carry = Signal(1) # register
         saved_zero = Signal(1) # register
 
+        adder_immediate = Signal(16)
         adder_rhs_pos = Signal(16)
         adder_rhs = Signal(16)
 
@@ -163,24 +164,13 @@ class EWBox(Component):
         zero_out = Signal(1)
 
         m.d.comb += [
-            # Adder RHS operand selection. We choose the "positive" version of
-            # the operand here and potentially complement it below.
-            #
-            # This mux has to be state sensitive, beyond simply choosing top or
-            # bottom half of an operand, because of branches. Branches are the
-            # only operation that perform two independent additions: first a
-            # comparison, then a branch target calculation.
-            adder_rhs_pos.eq(oneof([
-                # Register, for ALU reg-reg. This is the easiest case since
-                # the halfword is implicitly chosen by the register file
-                # access.
-                (dec.is_alu_rr, self.rf_resp),
-                # Branches require nuanced handling.
-                (dec.is_b, onehot_choice(self.onehot_state, {
-                    4: lohalf(imm.b),
-                    5: hihalf(imm.b),
-                }, default = self.rf_resp)),
-                # The various immediates:
+            # The immediate selection for the adder has never come up on the
+            # critical path, so it pays to put more levels of logic _here_ and
+            # then have as thin of a mux as possible to choose between this or
+            # the register file at the very end.
+            adder_immediate.eq(oneof([
+                (dec.is_b & (self.onehot_state[4] | self.onehot_state[5]),
+                    choosehalf(self.onehot_state[5], imm.b)),
                 (dec.is_auipc_or_lui,
                  choosehalf(self.onehot_state[3], imm.u)),
                 (dec.is_jal,
@@ -190,15 +180,33 @@ class EWBox(Component):
                 (dec.is_store,
                  choosehalf(self.onehot_state[3] | self.onehot_state[4], imm.s)),
             ])),
+
+            # Adder RHS operand selection. We choose the "positive" version of
+            # the operand here and potentially complement it below.
+            #
+            # This mux is complicated because of branches. Branches are the
+            # only operation that perform two independent additions: first a
+            # comparison, then a branch target calculation.
+            adder_rhs_pos.eq(mux(
+                # We use the register file in ALU reg-reg, and also during the
+                # comparison phase of branches. No halfword select is necessary
+                # because the half-width register file implicitly selects one.
+                # The select condition here is a function over four inputs, so
+                # this mux should require no more than two levels of logic.
+                dec.is_any_reg_to_adder
+                    & (self.onehot_state[1] | self.onehot_state[3]),
+                self.rf_resp,
+                adder_immediate,
+            )),
             # Generate the final adder_rhs value by conditionally complementing
             # in operate states. (We limit this to operate states to avoid
             # complementing the branch displacement used to compute
             # destinations in states 4/5.)
-            adder_rhs.eq(mux(
-                dec.is_adder_rhs_complemented & (self.onehot_state[1] | self.onehot_state[3]),
-                ~adder_rhs_pos,
-                adder_rhs_pos,
-            )),
+            adder_rhs.eq(
+                adder_rhs_pos ^
+                (dec.is_adder_rhs_complemented
+                    & (self.onehot_state[1] | self.onehot_state[3])).replicate(16)
+            ),
             # Adder implementation:
             Cat(adder_result, adder_carry_out).eq(
                 self.accum + adder_rhs + saved_carry,
