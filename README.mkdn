@@ -16,10 +16,10 @@ overengineered fast version (`boxcpu`).
 
 - Native 16-bit bus allows for simpler peripherals and external RAMs. (Can run
   out of external 16-bit SRAM with no penalty.)
-- Up to 13.3M inst/sec on iCE40 HX1K, which compares favorably with some fully
+- Up to 12M+ inst/sec on iCE40 HX1K, which compares favorably with some fully
   32-bit cores.
-- A basic SoC with tiny RAM and a basic peripheral in as little as 59% of an
-  HX1K.
+- A basic SoC with tiny RAM and a simple peripheral in as little as 59% of an
+  HX1K. (See the `icestick-smallest` script.)
 - Parameterized with knobs for trading off size vs capability.
 - Implements the RV32I unprivileged instruction set (currently missing FENCE and
   SYSTEM).
