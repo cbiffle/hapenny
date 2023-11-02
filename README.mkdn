@@ -14,12 +14,11 @@ overengineered fast version (`boxcpu`).
 
 ## Bullet points
 
+- Over 12M inst/sec on iCE40 HX1K, while occupying under 800 LCs, or less than
+  63% of the chip. (Throughput compares favorably to some 32-bit implementations
+  occupying twice the area.)
 - Native 16-bit bus allows for simpler peripherals and external RAMs. (Can run
   out of external 16-bit SRAM with no penalty.)
-- Up to 12M+ inst/sec on iCE40 HX1K, which compares favorably with some fully
-  32-bit cores.
-- A basic SoC with tiny RAM and a simple peripheral in as little as 59% of an
-  HX1K. (See the `icestick-smallest` script.)
 - Parameterized with knobs for trading off size vs capability.
 - Implements the RV32I unprivileged instruction set (currently missing FENCE and
   SYSTEM).
@@ -44,8 +43,8 @@ but takes 32-64 cycles per instruction.
 | Datapath width (bits)          | 32             | **16**      | **16**     | 1 |
 | External data bus width        | 32             | **16**      | **16**     | 32 |
 | Average cycles per instruction | 5.429          | **5.525**   | **8.033**  | 40-ish |
-| Minimal size on iCE40 (LCs)    | 1500-ish       | **813**     | **762**    | 200-ish |
-| Typical MHz on iCE40           | 40s?           | **66+**     | **66+**    | 40s? |
+| Minimal size on iCE40 (LCs)    | 1500-ish       | **798**     | **762**    | 200-ish |
+| Typical MHz on iCE40           | 40s?           | **72+**     | **66+**    | 40s? |
 
 (Cycles/instruction is measured on Dhrystone. Minimal size is the output
 produced by the `icestick-smallest.py` script. I would appreciate help getting
@@ -54,13 +53,15 @@ apples-to-apples comparison numbers!)
 So, basically,
 
 - `hapenny` is significantly smaller than a similarly-configured PicoRV32 core
-  for only 1.7% less performance per clock. (However, PicoRV32 is a far more
+  for only 1.7% less performance per clock. (Of course, PicoRV32 is a far more
   general and well-tested processor.)
-- `hapenny` is much faster than SERV, but also about 4x larger.
+- `hapenny` is much faster than SERV, but also about 4x larger. (SERV is also
+  better tested than `hapenny`.)
 
-`hapenny` is also easy to interface to 16-bit peripherals and external memory
-with no performance loss. This can result in smaller overall designs and simpler
-boards.
+`hapenny` is easy to interface to 16-bit peripherals and external memory with no
+(additional) performance loss. This can result in smaller overall designs and
+simpler boards. For instance, `hapenny` can run at full rate out of the 16-bit
+SRAM on the Icoboard.
 
 Independent from the datapath width, I also did some fairly aggressive manual
 register retiming in the decoder and datapath, which means `hapenny` can often

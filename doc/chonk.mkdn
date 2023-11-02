@@ -42,19 +42,24 @@ This is largely responsible for its lower clocks-per-instruction.
 
 | Parameter              | `hapenny` 2 | `chonk` | Change |
 | ---------------------- | ----------- | ------- | ------ |
-| LCs on iCE40           | 813         | 972     | +20%   |
-| Fmax (MHz)             | 66          | 62      | -6%    |
+| LCs on iCE40           | 798         | 971     | +22%   |
+| Fmax (MHz)             | 72          | 62      | -14%   |
 | Cycles/instruction     | 5.525       | 2.925   | -47%   |
-| Instructions/second    | 11.946      | 21.197  | +77%   |
+| Instructions/second    | 13.032      | 21.197  | +63%   |
+
+(Comparison of the output of `icestick-smallest` vs `icestick-chonk`.
+Cycles/instruction numbers are from Dhrystone and will vary depending on
+instruction mix.)
 
 Observations:
 
 - `chonk` tends to have a lower Fmax than `hapenny` because of longer carry
-  chains in additions and comparisons.
+  chains in additions and comparisons. `hapenny` is far more amenable to having
+  its critical path rearranged.
 
-- `chonk` is only about 21% larger, because much of the control logic is
-  unchanged, and a lot of datapath control logic removed compared to the 16-bit
-  version.
+- `chonk` is only about 22% larger, rather than twice as large, because much of
+  the control logic is unchanged, and a lot of datapath control logic removed
+  compared to the 16-bit version.
 
 - Even with the lower Fmax, `chonk` gets significantly higher performance in
   terms of RV32 instructions executed per second.
