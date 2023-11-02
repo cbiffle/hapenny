@@ -3,7 +3,8 @@
 #
 # This is not a spectacularly _useful_ configuration, and is smaller than the
 # "small" configurations most other small RV32I SoCs include, so the numbers
-# don't necessarily compare directly.
+# don't necessarily compare directly. It's essentially a 32-bit version of a
+# tinyAVR.
 #
 # Mostly, I use this to keep an eye on the minimum size with a circuit that
 # isn't so simple that it optimizes away in synthesis.
@@ -22,8 +23,7 @@ from amaranth_boards.icestick import ICEStickPlatform
 import amaranth.lib.cdc
 
 from hapenny import StreamSig
-import hapenny.boxcpu
-import hapenny.cpu16
+import hapenny.cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.gpio import OutputPort
 from hapenny.mem import BasicMemory
@@ -51,10 +51,6 @@ RAM_ADDR_BITS = (RAM_WORDS - 1).bit_length()
 BUS_ADDR_BITS = RAM_ADDR_BITS + 1
 
 class Test(Elaboratable):
-    def __init__(self, *, new_model = False):
-        super().__init__()
-        self.new_model = new_model
-
     def elaborate(self, platform):
         m = Module()
 
@@ -83,12 +79,8 @@ class Test(Elaboratable):
         m.domains += cd_sync
         m.d.comb += ResetSignal("sync").eq(~por_ready)
 
-        if self.new_model:
-            F = 72e6 # Hz
-            pll_f, pll_q = 47, 3
-        else:
-            F = 66e6 # Hz
-            pll_f, pll_q = 87, 4
+        F = 72e6 # Hz
+        pll_f, pll_q = 47, 3
 
         platform.add_clock_constraint(cd_sync.clk, F)
         print(f"Configuring SoC for {F/1000000:.03} MHz")
@@ -108,23 +100,16 @@ class Test(Elaboratable):
         )
 
         # Ok, back to the design.
-        if self.new_model:
-            m.submodules.cpu = cpu = hapenny.boxcpu.Cpu(
-                # +1 to adjust from bus halfword addressing to CPU byte
-                # addressing.
-                addr_width = BUS_ADDR_BITS + 1,
-                # Program addresses only need to be able to address program
-                # memory, so configure the PC and fetch port to be narrower.
-                # (+1 because, again, our RAM is halfword addressed but this
-                # parameter is in bytes.)
-                prog_addr_width = RAM_ADDR_BITS + 1,
-            )
-        else:
-            m.submodules.cpu = cpu = hapenny.cpu16.Cpu(
-                # +1 to adjust from bus halfword addressing to CPU byte
-                # addressing.
-                addr_width = BUS_ADDR_BITS + 1,
-            )
+        m.submodules.cpu = cpu = hapenny.cpu.Cpu(
+            # +1 to adjust from bus halfword addressing to CPU byte
+            # addressing.
+            addr_width = BUS_ADDR_BITS + 1,
+            # Program addresses only need to be able to address program
+            # memory, so configure the PC and fetch port to be narrower.
+            # (+1 because, again, our RAM is halfword addressed but this
+            # parameter is in bytes.)
+            prog_addr_width = RAM_ADDR_BITS + 1,
+        )
         m.submodules.mem = mem = BasicMemory(depth = RAM_WORDS,
                                              contents = boot_image)
         # Make the simplest output port possible.
@@ -146,8 +131,7 @@ parser = argparse.ArgumentParser(
     prog = "icestick-smallest",
     description = "Script for synthesizing smallest image for HX1K",
 )
-parser.add_argument('--new', help = 'use new CPU revision', required = False, action = 'store_true')
 args = parser.parse_args()
 
 p = ICEStickPlatform()
-p.build(Test(new_model = args.new), do_program = True)
+p.build(Test(), do_program = True)

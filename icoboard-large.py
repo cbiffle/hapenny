@@ -11,7 +11,7 @@ from amaranth.build import ResourceError, Resource, Pins, Attrs
 from boards.icoboard import IcoboardPlatform
 
 from hapenny import StreamSig
-from hapenny.boxcpu import Cpu
+from hapenny.cpu import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.gpio import OutputPort, InputPort
 from hapenny.serial import BidiUart

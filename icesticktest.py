@@ -11,7 +11,7 @@ from amaranth_boards.icestick import ICEStickPlatform
 import amaranth.lib.cdc
 
 from hapenny import StreamSig
-from hapenny.boxcpu import Cpu
+from hapenny.cpu import Cpu
 from hapenny.bus import BusPort, SimpleFabric, partial_decode
 from hapenny.serial import BidiUart
 from hapenny.mem import BasicMemory
