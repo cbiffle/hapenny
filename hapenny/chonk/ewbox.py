@@ -407,13 +407,13 @@ class EWBox(Component):
             self.from_the_top.eq(end_of_instruction),
 
             # Bubble control, gated on self.full:
-            start_bubble.eq(self.full & onehot_choice(self.onehot_state, {
-                1: dec.is_jal_or_jalr,
+            start_bubble.eq(self.full & oneof([
+                (dec.is_jal_or_jalr, 1),
                 # Taken branches create a bubble from state 2. Not-taken
                 # branches, and loads and shifts, can make it to state 2
                 # without bubbling.
-                2: dec.is_b & branch_taken_d,
-            })),
+                (dec.is_b, self.onehot_state[2] & branch_taken_d),
+            ])),
         ]
         m.d.sync += [
             # Program counter updates.
