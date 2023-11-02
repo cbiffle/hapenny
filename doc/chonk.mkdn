@@ -42,7 +42,7 @@ This is largely responsible for its lower clocks-per-instruction.
 
 | Parameter              | `hapenny` 2 | `chonk` | Change |
 | ---------------------- | ----------- | ------- | ------ |
-| LCs on iCE40           | 798         | 971     | +22%   |
+| LCs on iCE40           | 796         | 971     | +22%   |
 | Fmax (MHz)             | 72          | 62      | -14%   |
 | Cycles/instruction     | 5.525       | 2.925   | -47%   |
 | Instructions/second    | 13.032      | 21.197  | +63%   |

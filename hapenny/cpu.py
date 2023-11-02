@@ -113,7 +113,6 @@ class Cpu(Component):
 
         m.d.comb += [
             fd.onehot_state.eq(s.onehot_state),
-            fd.pc.eq(ew.pc_next),
             fd.from_the_top.eq(ew.from_the_top),
 
             ew.onehot_state.eq(s.onehot_state),
@@ -136,6 +135,7 @@ class Cpu(Component):
             self.debug.pc.eq(Cat(0, 0, ew.pc)),
             self.debug.pc_write.ready.eq(ew.debug_pc_write.ready),
         ]
+        connect(m, ew.fetch_pc, fd.pc)
 
         # Combine the register file write ports from EW (primary) and the debug
         # interface (secondary). We use an actual mux here instead of OR-ing to
@@ -211,7 +211,7 @@ class Cpu(Component):
             rvfi.full.eq(ew.full),
             rvfi.end_of_instruction.eq(ew.from_the_top),
             rvfi.pc.eq(Cat(0, 0, ew.pc)),
-            rvfi.pc_next.eq(Cat(0, 0, ew.pc_next)),
+            rvfi.pc_next.eq(Cat(0, 0, ew.fetch_pc.payload)),
             rvfi.insn.eq(ew.debug_inst),
             rvfi.rf_read_resp_snoop.eq(rf.read_resp),
 

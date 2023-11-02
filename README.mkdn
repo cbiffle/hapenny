@@ -43,7 +43,7 @@ but takes 32-64 cycles per instruction.
 | Datapath width (bits)          | 32             | **16**    | 1 |
 | External data bus width        | 32             | **16**    | 32 |
 | Average cycles per instruction | 5.429          | **5.525** | 40-ish |
-| Minimal size on iCE40 (LCs)    | 1500-ish       | **798**   | 200-ish |
+| Minimal size on iCE40 (LCs)    | 1500-ish       | **796**   | 200-ish |
 | Typical MHz on iCE40           | 40s?           | **72+**   | 40s? |
 
 (Cycles/instruction is measured on Dhrystone. Minimal size is the output

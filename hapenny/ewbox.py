@@ -66,10 +66,10 @@ class EWBox(Component):
 
     bus (port): our connection to the memory fabric.
 
-    pc_next (output): PC to FD for fetch of next instruction. We need to provide
-        a useful next-PC value here by the end of state 1 (ideally, earlier) to
-        get a useful fetch done. We then need to hold that value through states
-        1 and 2.
+    fetch_pc (output): PC to FD for fetch of next instruction. We need to
+        provide a useful next-PC value here by the end of state 1 (ideally,
+        earlier) to get a useful fetch done. We then need to hold that value
+        through states 1 and 2.
     from_the_top (output): signals S-Box to rewind state when asserted.
     rf_write_cmd (port): output to register file to write registers.
     full (output): indicates whether we're doing useful work. When we have a
@@ -111,7 +111,7 @@ class EWBox(Component):
         self.bus = BusPort(addr = addr_width - 1, data = 16).create()
 
         # The PC width is -2 because it's addressing words.
-        self.pc_next = Signal(prog_addr_width - 2)
+        self.fetch_pc = AlwaysReady(prog_addr_width - 2).create()
 
         self.accum = Signal(16)
         self.pc = Signal(prog_addr_width - 2, reset = reset_vector >> 2)
@@ -427,15 +427,13 @@ class EWBox(Component):
         # end_of_instruction signal.
         end_of_instruction = Signal(1)
         start_bubble = Signal(1)
+        pc_next = Signal(self.pc.shape().width)
         pc_inc = Signal(self.pc.shape().width)
         m.d.comb += [
             # Dedicated program counter incrementer.
             pc_inc.eq(self.pc + 1),
             # Address we send to FD / load into PC
-            # TODO: this is used for both the PC update rule and the address
-            # presented to fetch, but the first bits are irrelevant for fetch
-            # -- could this be simplified?
-            self.pc_next.eq(mux(
+            pc_next.eq(mux(
                 self.full,
                 # When full, the PC we send is either...
                 mux(
@@ -451,6 +449,8 @@ class EWBox(Component):
                 # rather than next, as we are no longer speculating.
                 self.pc,
             )),
+            self.fetch_pc.payload.eq(pc_next),
+            self.fetch_pc.valid.eq(~start_bubble),
             # Instruction termination
             end_of_instruction.eq(onehot_choice(self.onehot_state, {
                 3: oneof([
@@ -479,13 +479,13 @@ class EWBox(Component):
             self.from_the_top.eq(end_of_instruction),
 
             # Bubble control, gated on self.full:
-            start_bubble.eq(self.full & onehot_choice(self.onehot_state, {
-                3: dec.is_jal_or_jalr,
+            start_bubble.eq(self.full & oneof([
+                (dec.is_jal_or_jalr, 1),
                 # Any branch that makes it to state 5 is being taken, and so is
                 # creating a bubble. (Loads and shifts can make it to state 5
                 # without creating a bubble.)
-                5: dec.is_b,
-            })),
+                (dec.is_b, self.onehot_state[5]),
+            ])),
         ]
         m.d.sync += [
             # Program counter updates.
@@ -496,7 +496,7 @@ class EWBox(Component):
                  self.debug_pc_write.payload),
                 # Otherwise, in the final cycle of any instruction, we latch the
                 # pc_next value we were sending to FD-Box.
-                (end_of_instruction & self.full, self.pc_next),
+                (end_of_instruction & self.full, pc_next),
                 # In all other circumstancs we leave the register unchanged.
             ], default = self.pc)),
             # Bubble logic.

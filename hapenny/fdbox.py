@@ -24,7 +24,9 @@ class FDBox(Component):
     Attributes
     ----------
     onehot_state (input): state input from the S-Box
-    pc (input): program counter from EW-box.
+    pc (input): program counter from EW-box; includes a 'valid' signal that
+        determines whether a fetch happens, to avoid wild fetches of nonsense
+        addresses.
     rf_cmd (output): read command to the register file, intended to be OR'd.
     inst_next (output): instruction word for EW to use next time we restart
         from the top.
@@ -47,7 +49,7 @@ class FDBox(Component):
         self.bus = BusPort(addr = prog_addr_width - 1, data = 16).create()
 
         # The PC width is -2 because it's addressing words.
-        self.pc = Signal(prog_addr_width - 2)
+        self.pc = AlwaysReady(prog_addr_width - 2).flip().create()
 
         self.inst = Signal(32)
 
@@ -63,12 +65,14 @@ class FDBox(Component):
 
         m.d.comb += [
             # We issue bus transactions in states 1 and 2 only.
-            self.bus.cmd.valid.eq(self.onehot_state[1] | self.onehot_state[2]),
+            self.bus.cmd.valid.eq(
+                self.pc.valid & (self.onehot_state[1] | self.onehot_state[2])
+            ),
             # In those states we select the bottom and top halves of the
             # instruction, respectively.
             self.bus.cmd.payload.addr.eq(onehot_choice(self.onehot_state, {
-                1: Cat(0, self.pc),
-                2: Cat(1, self.pc),
+                1: Cat(0, self.pc.payload),
+                2: Cat(1, self.pc.payload),
             })),
 
             # We access the register file only in the last cycle.
