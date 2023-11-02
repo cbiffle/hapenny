@@ -5,7 +5,7 @@ from amaranth.lib.wiring import *
 from amaranth.lib.enum import *
 from amaranth.lib.coding import Encoder, Decoder
 
-from hapenny import StreamSig, AlwaysReady
+from hapenny import StreamSig, AlwaysReady, treeduce
 
 class BusCmd(Signature):
     def __init__(self, *, addr, data):
@@ -106,6 +106,6 @@ class SimpleFabric(Elaboratable):
             data = d.resp & (last_id == i).replicate(self.data_bits)
             response_data.append(data)
 
-        m.d.comb += self.bus.resp.eq(reduce(lambda a, b: a | b, response_data))
+        m.d.comb += self.bus.resp.eq(treeduce(lambda a, b: a | b, response_data))
 
         return m

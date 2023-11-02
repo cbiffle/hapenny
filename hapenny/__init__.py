@@ -146,4 +146,14 @@ def lohalf(signal):
 def choosehalf(hi, signal):
     return mux(hi, hihalf(signal), lohalf(signal))
 
+# Combines a list of signals using binary function 'fun', organizing them into
+# a balanced binary tree instead of a linked list like reduce/foldl would.
+def treeduce(fun, items):
+    if len(items) == 1:
+        return items[0]
+
+    partition = len(items) // 2
+    left = items[:partition]
+    right = items[partition:]
+    return fun(treeduce(fun, left), treeduce(fun, right))
 
