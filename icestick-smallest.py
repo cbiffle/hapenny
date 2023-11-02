@@ -65,7 +65,7 @@ class Test(Elaboratable):
         clk12 = platform.request("clk12", dir = "-")
 
         # 15us delay, 12 MHz clock: 180 cycles
-        por_delay = int(15e-6 * 12e6)
+        por_delay = int(20e-6 * 12e6)
         m.domains += ClockDomain("por", reset_less=True, local=True)
         por_timer = Signal(range(por_delay))
         por_ready = Signal()
@@ -79,8 +79,8 @@ class Test(Elaboratable):
         m.domains += cd_sync
         m.d.comb += ResetSignal("sync").eq(~por_ready)
 
-        F = 72e6 # Hz
-        pll_f, pll_q = 47, 3
+        F = 70.5e6 # Hz
+        pll_f, pll_q = 46, 3
 
         platform.add_clock_constraint(cd_sync.clk, F)
         print(f"Configuring SoC for {F/1000000:.03} MHz")
