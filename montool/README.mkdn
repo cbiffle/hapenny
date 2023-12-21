@@ -6,3 +6,28 @@ monitor.
 For instructions:
 
 `cargo run -- --help`
+
+
+```
+A tool for interacting with the hapenny tinyboot serial monitor
+
+Usage: hapenny-montool [OPTIONS] <PORT> <COMMAND>
+
+Commands:
+  ping   Perform a basic check to see if tinyboot appears to be running
+  peek   Load a single 32-bit word from an address in the target
+  poke   Write a single 32-bit word into the taget
+  write  Write the contents of a file into the target. Useful for loading a program from a .bin file
+  call   Call into an address in the target
+  run    Write and then Call at the given address , (default zero)
+  help   Print this message or the help of the given subcommand(s)
+
+Arguments:
+  <PORT>  Path to serial port on your machine, e.g. /dev/ttyUSB0 or COM1:
+
+Options:
+  -b, --baud-rate <BAUD_RATE>  Baud rate of serial port [default: 115200]
+  -h, --help                   Print help
+  -V, --version                Print version
+
+```
