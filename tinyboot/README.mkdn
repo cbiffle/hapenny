@@ -20,12 +20,15 @@ riscv32-elf-objcopy -Obinary \
     path-to-your-output-file.bin
 ```
 
-In practice, you probably want to override the UART address. You can do that
+In practice, you probably want to override the two configurable addresses. You can do that
 like this:
 
 ```
-TINYBOOT_UART_ADDR=0x01_0000 cargo build --release
+TINYBOOT_UART_ADDR=0x01_0000 TINYBOOT_STACK_START=0x400 cargo build --release
 ```
+
+This defines the address for the UART and templates the stack pointer for the linker.
+
 
 ## Serial protocol
 
@@ -101,9 +104,8 @@ Basic verification that the bootloader is responding.
 
 ## Configuring for your board
 
-The environment variable `TINYBOOT_UART_ADDR` determines the location of the
-UART in the address space, which is currently the only configurable part of the
-bootloader.
+The environment variables  `TINYBOOT_UART_ADDR` and `TINYBOOT_STACK_START` determines the location of the
+UART and the stack pointer in the address space respectivly.
 
 The binary itself is position-independent so the location of your boot ROM
 doesn't matter...except for the following.
