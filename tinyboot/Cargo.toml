@@ -18,3 +18,6 @@ bench = false
 
 [build-dependencies]
 parse_int = "0.6.0"
+askama = "0.12.1"
+
+
